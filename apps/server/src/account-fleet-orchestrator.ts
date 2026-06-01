@@ -261,18 +261,43 @@ export function startAccountFleetScheduler(
     });
   }
 
+  // tick 硬超时保护:调度循环靠 tick().finally(scheduleNext) 排下一次——对 tick **抛错**健壮,
+  // 但对 tick "卡住永不 settle"(如某个无超时的 Sub2API/网络调用 stall)无能为力:.finally 永不
+  // 触发 → 整个编排冻死(实测午夜一次 stall 把调度器冻到天亮、自动注册全停)。这里给每次 tick
+  // 套 3 分钟硬超时:超时即放弃本次(底层挂起的 promise 任其后台自然结束)、保证一定排下一轮自愈。
+  async function tickGuarded(): Promise<void> {
+    const TICK_TIMEOUT_MS = 3 * 60_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        tick().then(() => undefined),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`reconcile tick 超时(>${TICK_TIMEOUT_MS}ms),放弃本次、继续下一轮`)),
+            TICK_TIMEOUT_MS
+          );
+          timer.unref?.();
+        })
+      ]);
+    } catch (err) {
+      console.error("AccountFleetScheduler tick 错误/超时:", err instanceof Error ? err.message : err);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   function scheduleNext(): void {
     if (stopped) return;
     const spec = repo.getAccountFleetSpec();
     const interval = Math.max(30_000, spec.reconcileIntervalMs);
     nextTimer = setTimeout(() => {
-      void tick().finally(scheduleNext);
+      void tickGuarded().finally(scheduleNext);
     }, interval);
     nextTimer.unref?.();
   }
 
-  // 启动时立即跑一次
-  void tick().finally(() => {
+  // 启动时立即跑一次(同样套超时保护)
+  void tickGuarded().finally(() => {
     if (!stopped) scheduleNext();
   });
 
