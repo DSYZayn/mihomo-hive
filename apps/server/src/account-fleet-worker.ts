@@ -277,7 +277,7 @@ async function runCodexLogin(
   repo.patchAccount(account.id, { intent: "recovering" });
 
   const egress = resolveEgressForLogin(repo, spec, account);
-  appendJobLog(job.id, egress ? `选定出口节点 ${egressLabel(repo, egress)}` : "未走本地出口（egress=none）");
+  appendJobLog(job.id, egressLogLine(repo, spec, egress));
   const adapter = await buildCodexToolAdapter(repo, crypto, spec, egress, { idempotencyKey: job.id });
   appendJobLog(job.id, "调用 codex-tool login（chromium/Sentinel，串行排队中）…");
   // 串行化：codex-tool 的 chromium/Sentinel 调用不能并发（见 withCodexToolLock）。
@@ -338,7 +338,7 @@ async function runCodexRegister(
   await assertAgentHealthy(crypto, spec); // 外置 agent 不可达 → NoEgressAvailableError（不烧额度）
   // 注册：按质量+负载加权随机选 egress，让新账号 IP 出生地自然分散
   const egress = resolveEgressForRegister(repo, spec);
-  appendJobLog(job.id, egress ? `选定出口节点 ${egressLabel(repo, egress)}` : "未走本地出口（egress=none）");
+  appendJobLog(job.id, egressLogLine(repo, spec, egress));
   const adapter = await buildCodexToolAdapter(repo, crypto, spec, egress, { idempotencyKey: job.id });
   appendJobLog(job.id, "调用 codex-tool all（注册 + OAuth，串行排队中）…");
   // 串行化：与 login 共用同一闸门，避免两个 chromium 同时跑
@@ -1168,6 +1168,17 @@ function egressLabel(repo: HiveRepository, egress: EgressSelection): string {
   const name = node?.name ?? egress.hash.slice(0, 8);
   const tag = egress.reserved ? "保留" : egress.reason;
   return `${name} [${tag}]`;
+}
+
+/** job 日志里的"出口"行。动态出口关闭时,真实出口是 agent 本机配置的代理(如 192.168.5.8),
+ * 选中的节点只作记录、并不生效——所以别再打成"选定出口节点 XX"误导以为在走机房节点。 */
+function egressLogLine(repo: HiveRepository, spec: AccountFleetSpec, egress: EgressSelection | null): string {
+  if (!codexEgressRuntime(spec).enabled) {
+    return egress
+      ? `出口：agent 本机直连(动态出口关闭;选节点 ${egressLabel(repo, egress)} 仅记录、未启用)`
+      : "出口：agent 本机直连(动态出口关闭)";
+  }
+  return egress ? `选定出口节点 ${egressLabel(repo, egress)}` : "未走本地出口（egress=none）";
 }
 
 function recordNodeOutcome(
