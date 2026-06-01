@@ -133,6 +133,28 @@ export function startAccountJobsWorker(options: AccountJobsWorkerOptions): Accou
         return true;
       }
     }
+    // 执行前实时门控：自动注册关闭(registration.enabled=false)时，跳过排队中的
+    // 「扩池自动注册」(account_id===null 且非手动触发)。原因：关开关只停止 planner 规划
+    // 新注册，已排队的尾巴不会被取消、仍会执行——所以在这里按当前配置二次确认。
+    //   · 手动「立即注册」(triggeredBy==="manual") 豁免：用户主动点的不受开关限制；
+    //   · 恢复式注册(account_id 有值)不在此拦截：它由 recovery.enabled 管，若按注册开关
+    //     拦截，planner 下个 tick 会重新规划它 → 每 tick 取消一次的死循环。
+    if (
+      job.kind === "codex_register" &&
+      job.accountId === null &&
+      job.triggeredBy !== "manual" &&
+      !spec.registration.enabled
+    ) {
+      appendJobLog(job.id, "⊘ 跳过：自动注册已关闭（registration.enabled=false）；手动立即注册不受此限制");
+      repo.updateAccountJob(job.id, {
+        status: "cancelled",
+        finishedAt: new Date().toISOString(),
+        errorMessage: "自动注册已关闭，跳过排队中的扩池注册任务",
+        logTail: finalizeJobLog(job.id)
+      });
+      console.log(`AccountJobsWorker: 自动注册已关闭，跳过扩池注册任务 ${job.id}（标记 cancelled）。`);
+      return true;
+    }
     // 抢占式：再次检查后才标 running，避免重复消费
     running++;
     if (isAgentJob) agentRunning = true;

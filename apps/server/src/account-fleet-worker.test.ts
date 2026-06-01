@@ -122,6 +122,57 @@ describe("AccountJobsWorker", () => {
     expect(job?.errorMessage).toContain("Sub2API");
   });
 
+  function enqueueRegister(id: string, triggeredBy: "manual" | "scheduler") {
+    const now = new Date().toISOString();
+    repo.enqueueAccountJob({
+      id,
+      kind: "codex_register",
+      accountId: null,
+      status: "queued",
+      attempt: 0,
+      maxAttempts: 1,
+      priority: 50,
+      scheduledAt: now,
+      startedAt: null,
+      finishedAt: null,
+      durationMs: null,
+      payloadJson: "{}",
+      resultJson: null,
+      errorMessage: null,
+      triggeredBy,
+      triggeredTickId: null,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
+  it("自动注册关闭：跳过排队中的扩池注册(scheduler)，标记 cancelled", async () => {
+    repo.saveAccountFleetSpec(makeSpec({
+      registration: { ...defaultAccountFleetSpec.registration, enabled: false }
+    }));
+    enqueueRegister("reg-auto", "scheduler");
+    const worker = startAccountJobsWorker({ repo, crypto, manualOnly: true });
+    await worker.pump();
+    worker.stop();
+    const job = repo.getAccountJob("reg-auto");
+    expect(job?.status).toBe("cancelled");
+    expect(job?.errorMessage).toContain("自动注册已关闭");
+  });
+
+  it("自动注册关闭：手动「立即注册」豁免，照常尝试执行(不被 cancelled)", async () => {
+    repo.saveAccountFleetSpec(makeSpec({
+      registration: { ...defaultAccountFleetSpec.registration, enabled: false }
+    }));
+    enqueueRegister("reg-manual", "manual");
+    const worker = startAccountJobsWorker({ repo, crypto, manualOnly: true });
+    await worker.pump();
+    worker.stop();
+    const job = repo.getAccountJob("reg-manual");
+    // 手动注册不受开关限制：它会进入执行(无 agent/出口配置则失败),但绝不会被门控 cancelled。
+    expect(job?.status).not.toBe("cancelled");
+    expect(job?.errorMessage ?? "").not.toContain("自动注册已关闭");
+  });
+
   it("delete_sub2api: account without externalId fails immediately", async () => {
     const acc = makeAccount(crypto, { externalId: null });
     repo.upsertAccount(acc);
