@@ -1,16 +1,83 @@
 import React from "react";
-import { Activity, CheckCircle2, Save, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Plus, Save, Trash2, XCircle } from "lucide-react";
 import type { AccountFleetSpec } from "@mihomo-hive/schemas";
 import {
   Badge,
   Button,
   Checkbox,
   CollapsiblePanel,
+  IconButton,
   InfoTip,
   Panel,
   SelectInput,
+  Switch,
   TextInput
 } from "../../components/ui.js";
+
+/** 常见、风控风险较低的注册邮箱子域名前缀示例(看起来像正常邮件子域,不像一次性邮箱)。 */
+const SAMPLE_SUBDOMAIN_PREFIXES = ["mail", "mx", "inbox", "post", "me", "box", "mbox", "send", "mail2", "relay"];
+
+/**
+ * 注册邮箱域名池编辑器:每次注册从"启用"的域名里随机抽一个,把风控指纹分散到多个自定义子域名。
+ * 关掉某个域名(Switch)即实时停用——下个注册不再抽到它(方便随时停用被风控的域名)。
+ * 池为空(或全部禁用)时,系统回退到下方的"单一 mail domain"。
+ */
+function MailDomainPool(props: {
+  domains: { domain: string; enabled: boolean }[];
+  onChange: (next: { domain: string; enabled: boolean }[]) => void;
+}) {
+  const list = props.domains;
+  const setAt = (i: number, patch: Partial<{ domain: string; enabled: boolean }>) =>
+    props.onChange(list.map((d, idx) => (idx === i ? { ...d, ...patch } : d)));
+  const remove = (i: number) => props.onChange(list.filter((_, idx) => idx !== i));
+  const add = () => props.onChange([...list, { domain: "", enabled: true }]);
+  const enabledCount = list.filter((d) => d.enabled && d.domain.trim()).length;
+  return (
+    <div className="mail-domain-pool">
+      <div className="config-subgroup-label">
+        注册邮箱域名池（随机抽取）
+        <InfoTip text="每次注册从“启用”的域名里随机抽一个，分散风控指纹。关掉某个域名即实时停用，下个注册不再抽到它。池为空时回退到下方单一 mail domain。" />
+        <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>
+          {enabledCount} 个启用 / 共 {list.length} 个
+        </span>
+      </div>
+      {list.length === 0 ? (
+        <div className="muted" style={{ fontSize: 13, margin: "4px 0 8px" }}>
+          尚未配置域名池——当前用下方单一 mail domain。点“添加域名”开始配置多域名随机。
+        </div>
+      ) : (
+        <div className="domain-rows">
+          {list.map((d, i) => (
+            <div className="domain-row" key={i}>
+              <TextInput
+                label=""
+                value={d.domain}
+                onChange={(v) => setAt(i, { domain: v })}
+                placeholder="mail.yourdomain.com"
+                mono
+              />
+              <Switch
+                checked={d.enabled}
+                onChange={(c) => setAt(i, { enabled: c })}
+                {...(d.enabled ? {} : { label: "停用" })}
+                title={d.enabled ? "已启用(会被随机抽到)" : "已停用(不会被抽到)"}
+              />
+              <IconButton label="删除该域名" icon={<Trash2 size={15} />} onClick={() => remove(i)} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+        <Button onClick={add} icon={<Plus size={15} />} variant="ghost" size="sm">
+          添加域名
+        </Button>
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          常见低风险前缀:{SAMPLE_SUBDOMAIN_PREFIXES.join("、")} —— 如 <code>mail.yourdomain.com</code>
+        </span>
+      </div>
+    </div>
+  );
+}
 
 /**
  * codex-tool 连接表单（P5-AK 从 AccountFleetSpecPanel 抽出复用）。
@@ -100,9 +167,13 @@ export function CodexToolConnectionPanel(props: {
         />
       </div>
       <div className="config-subgroup-label">ChatGPT OAuth</div>
+      <MailDomainPool
+        domains={draft.chatgpt.mailDomains}
+        onChange={(next) => patch((c) => ({ ...c, chatgpt: { ...c.chatgpt, mailDomains: next } }))}
+      />
       <div className="form-grid">
         <TextInput
-          label="mail domain"
+          label="mail domain（回退,池为空时用）"
           value={draft.chatgpt.mailDomain}
           onChange={(v) => patch((c) => ({ ...c, chatgpt: { ...c.chatgpt, mailDomain: v } }))}
           placeholder="example.com"

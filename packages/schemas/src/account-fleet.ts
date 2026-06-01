@@ -387,7 +387,21 @@ export const accountFleetCodexToolPolicySchema = z.object({
     .default({}),
   chatgpt: z
     .object({
+      /** 旧的单一注册邮箱域名;仅当 mailDomains 没有任何启用项时作为回退。 */
       mailDomain: z.string().default(""),
+      /**
+       * 注册邮箱域名池:每次注册从"启用"的域名里随机抽一个,把风控指纹分散到多个
+       * 自定义子域名上。enabled=false 可随时停用被风控的域名(实时生效,下个注册即不再抽到)。
+       * 为空(或全部禁用)时回退到上面的单一 mailDomain。
+       */
+      mailDomains: z
+        .array(
+          z.object({
+            domain: z.string().min(1),
+            enabled: z.boolean().default(true)
+          })
+        )
+        .default([]),
       chatWebClientId: z.string().default(""),
       codexClientId: z.string().default("")
     })

@@ -1628,6 +1628,31 @@ input[type="number"] {
   margin: 10px 0 4px;
 }
 
+/* 注册邮箱域名池编辑器 */
+.mail-domain-pool {
+  margin: 4px 0 10px;
+}
+.mail-domain-pool .domain-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mail-domain-pool .domain-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mail-domain-pool .domain-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+.mail-domain-pool code {
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
 .kpi-meta-totals {
   margin-left: auto;
 }

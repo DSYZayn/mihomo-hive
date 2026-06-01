@@ -375,7 +375,18 @@ async function runCodexRegister(
   // 注册：按质量+负载加权随机选 egress，让新账号 IP 出生地自然分散
   const egress = resolveEgressForRegister(repo, spec);
   appendJobLog(job.id, egressLogLine(repo, spec, egress));
-  const adapter = await buildCodexToolAdapter(repo, crypto, spec, egress, { idempotencyKey: job.id });
+  // 从域名池随机抽一个注册邮箱域名(分散风控指纹)。空池则回退单一 mailDomain。
+  const mail = pickRegisterMailDomain(spec);
+  appendJobLog(
+    job.id,
+    mail.poolSize > 0
+      ? `注册邮箱域名: ${mail.domain}（从 ${mail.poolSize} 个启用域名随机抽取）`
+      : `注册邮箱域名: ${mail.domain || "(未配置)"}（单一域名,未启用域名池）`
+  );
+  const adapter = await buildCodexToolAdapter(repo, crypto, spec, egress, {
+    idempotencyKey: job.id,
+    mailDomainOverride: mail.domain
+  });
   appendJobLog(job.id, "调用 codex-tool all（注册 + OAuth，串行排队中）…");
   // 串行化：与 login 共用同一闸门，避免两个 chromium 同时跑
   let outcome: Awaited<ReturnType<typeof adapter.registerOne>>;
@@ -1206,6 +1217,20 @@ function egressLabel(repo: HiveRepository, egress: EgressSelection): string {
   return `${name} [${tag}]`;
 }
 
+/**
+ * 注册邮箱域名:从启用的域名池里随机抽一个,把风控指纹分散到多个自定义子域名。
+ * 池为空(或全禁用)时回退到旧的单一 mailDomain。返回 { domain, poolSize } 供日志展示。
+ * 每次注册都重新读 spec + 重新抽 → 改动(增删/启停域名)实时生效,下个注册即按新池抽。
+ */
+export function pickRegisterMailDomain(spec: AccountFleetSpec): { domain: string; poolSize: number } {
+  const enabled = spec.codexTool.chatgpt.mailDomains.filter((d) => d.enabled && d.domain.trim());
+  if (enabled.length > 0) {
+    const picked = enabled[Math.floor(Math.random() * enabled.length)]!;
+    return { domain: picked.domain.trim(), poolSize: enabled.length };
+  }
+  return { domain: spec.codexTool.chatgpt.mailDomain, poolSize: 0 };
+}
+
 /** job 日志里的"出口"行。动态出口关闭时,真实出口是 agent 本机配置的代理(如 192.168.5.8),
  * 选中的节点只作记录、并不生效——所以别再打成"选定出口节点 XX"误导以为在走机房节点。 */
 function egressLogLine(repo: HiveRepository, spec: AccountFleetSpec, egress: EgressSelection | null): string {
@@ -1344,7 +1369,7 @@ export async function buildCodexToolAdapter(
    * 调用方不需要走出口（如 codex sms countries 之类纯查询，但当前实现总传 egress）。
    */
   egress: EgressSelection | null,
-  opts?: { idempotencyKey?: string }
+  opts?: { idempotencyKey?: string; mailDomainOverride?: string }
 ): Promise<CodexToolAdapter> {
   // P5-AM: codexTool.skymail.adminPasswordRef / phoneSms.apiKeyRef 按设计是「明文存储」
   // （docs：私有部署 UI 不脱敏，加密留作未来增强）。早期代码无脑 crypto.decrypt() 会把
@@ -1389,7 +1414,9 @@ export async function buildCodexToolAdapter(
       adminPassword: skymailPassword
     },
     chatgpt: {
-      mailDomain: spec.codexTool.chatgpt.mailDomain,
+      // register 路径传 mailDomainOverride(从域名池随机抽);其余场景(login/import)
+      // mail_domain 不参与(login 按账号已有邮箱的 toEmail 收 OTP),回退到单一 mailDomain。
+      mailDomain: opts?.mailDomainOverride || spec.codexTool.chatgpt.mailDomain,
       chatWebClientId: spec.codexTool.chatgpt.chatWebClientId,
       codexClientId: spec.codexTool.chatgpt.codexClientId
     },

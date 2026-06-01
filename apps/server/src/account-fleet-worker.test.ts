@@ -11,7 +11,7 @@ import {
   type AccountFleetSpec,
   type AccountRecordInternal
 } from "@mihomo-hive/schemas";
-import { startAccountJobsWorker } from "./account-fleet-worker.js";
+import { startAccountJobsWorker, pickRegisterMailDomain } from "./account-fleet-worker.js";
 
 function makeAccount(crypto: AccountCrypto, overrides: Partial<AccountRecordInternal> = {}): AccountRecordInternal {
   const now = new Date().toISOString();
@@ -171,6 +171,52 @@ describe("AccountJobsWorker", () => {
     // 手动注册不受开关限制：它会进入执行(无 agent/出口配置则失败),但绝不会被门控 cancelled。
     expect(job?.status).not.toBe("cancelled");
     expect(job?.errorMessage ?? "").not.toContain("自动注册已关闭");
+  });
+
+  describe("pickRegisterMailDomain", () => {
+    const withDomains = (mailDomain: string, mailDomains: { domain: string; enabled: boolean }[]) =>
+      makeSpec({
+        codexTool: {
+          ...makeSpec().codexTool,
+          chatgpt: { ...makeSpec().codexTool.chatgpt, mailDomain, mailDomains }
+        }
+      });
+
+    it("池为空 → 回退单一 mailDomain，poolSize=0", () => {
+      const r = pickRegisterMailDomain(withDomains("legacy.com", []));
+      expect(r).toEqual({ domain: "legacy.com", poolSize: 0 });
+    });
+
+    it("全部禁用 → 回退单一 mailDomain", () => {
+      const r = pickRegisterMailDomain(
+        withDomains("legacy.com", [
+          { domain: "a.com", enabled: false },
+          { domain: "b.com", enabled: false }
+        ])
+      );
+      expect(r.domain).toBe("legacy.com");
+      expect(r.poolSize).toBe(0);
+    });
+
+    it("只从启用项里抽，禁用项永不被抽到", () => {
+      const spec = withDomains("legacy.com", [
+        { domain: "on1.com", enabled: true },
+        { domain: "off.com", enabled: false },
+        { domain: "on2.com", enabled: true }
+      ]);
+      const picks = new Set<string>();
+      for (let i = 0; i < 200; i++) picks.add(pickRegisterMailDomain(spec).domain);
+      expect([...picks].sort()).toEqual(["on1.com", "on2.com"]);
+      expect(pickRegisterMailDomain(spec).poolSize).toBe(2);
+    });
+
+    it("忽略空白域名", () => {
+      const r = pickRegisterMailDomain(
+        withDomains("legacy.com", [{ domain: "  ", enabled: true }])
+      );
+      expect(r.domain).toBe("legacy.com");
+      expect(r.poolSize).toBe(0);
+    });
   });
 
   it("delete_sub2api: account without externalId fails immediately", async () => {
