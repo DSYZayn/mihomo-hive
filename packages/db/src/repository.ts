@@ -1196,14 +1196,28 @@ export class HiveRepository {
   }
 
   /** 取下一个待处理 job：status=queued AND scheduled_at ≤ now，按 priority,scheduled_at 排序。 */
-  claimNextAccountJob(now: string = new Date().toISOString()): AccountJob | undefined {
+  claimNextAccountJob(
+    now: string = new Date().toISOString(),
+    opts?: { excludeKinds?: string[] }
+  ): AccountJob | undefined {
+    // excludeKinds：调用方(worker)用它实现"agent 类 job 单飞"——已有一个登录/注册在跑时，
+    // 排除掉 codex_login/codex_register，只放行 import 等非 agent 类 job 并发。
+    const exclude = opts?.excludeKinds ?? [];
+    const placeholders = exclude.map((_, i) => `@k${i}`).join(", ");
+    const where = exclude.length
+      ? `status = 'queued' AND scheduled_at <= @now AND kind NOT IN (${placeholders})`
+      : `status = 'queued' AND scheduled_at <= @now`;
+    const params: Record<string, unknown> = { now };
+    exclude.forEach((k, i) => {
+      params[`k${i}`] = k;
+    });
     const row = this.sqlite
       .prepare(
         `SELECT * FROM account_jobs
-         WHERE status = 'queued' AND scheduled_at <= ?
+         WHERE ${where}
          ORDER BY priority ASC, scheduled_at ASC LIMIT 1`
       )
-      .get(now) as AccountJobRow | undefined;
+      .get(params) as AccountJobRow | undefined;
     if (!row) return undefined;
     return accountJobFromRow(row);
   }

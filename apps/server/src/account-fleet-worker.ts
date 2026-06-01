@@ -96,13 +96,25 @@ export function startAccountJobsWorker(options: AccountJobsWorkerOptions): Accou
   let stopped = false;
   let pollTimer: NodeJS.Timeout | undefined;
   let running = 0;
+  // agent 类 job(登录/注册)必须严格单飞：它们最终都打到同一个 codex-tool serve,
+  // serve 内部有全局 run_lock 串行化——两个并发的注册,第二个会吃 503 busy 被白白浪费
+  // (还可能撞 Cloudflare 风控)。所以无论 maxConcurrent 多大,同一时刻只允许一个 agent job;
+  // import 等非 agent 类 job 仍可按 maxConcurrent 并发。claim→标 running 之间无 await,
+  // agentRunning 的读写在同一事件循环 tick 内,并发的 tryConsumeOne 不会漏判。
+  let agentRunning = false;
+  const AGENT_KINDS = ["codex_login", "codex_register"];
 
   async function tryConsumeOne(): Promise<boolean> {
     const spec = repo.getAccountFleetSpec();
     const maxConcurrent = Math.max(1, spec.recovery.maxConcurrent);
     if (running >= maxConcurrent) return false;
-    const job = repo.claimNextAccountJob();
+    // 已有 agent job 在跑 → 本次只认非 agent 类 job,把登录/注册留到它跑完再抢。
+    const job = repo.claimNextAccountJob(
+      undefined,
+      agentRunning ? { excludeKinds: AGENT_KINDS } : undefined
+    );
     if (!job) return false;
+    const isAgentJob = job.kind === "codex_login" || job.kind === "codex_register";
     // P5-AV 执行前防御：恢复类 job 真正 spawn codex-tool 之前，复查账号当前状态。
     // 若账号已退役（多为 account_unusable 死账号）→ 直接作废这条残留 queued job，
     // 不浪费串行 codex-tool 槽位死磕。返回 true 让 poll 立刻继续下一条。
@@ -123,6 +135,7 @@ export function startAccountJobsWorker(options: AccountJobsWorkerOptions): Accou
     }
     // 抢占式：再次检查后才标 running，避免重复消费
     running++;
+    if (isAgentJob) agentRunning = true;
     const startedAt = new Date();
     repo.updateAccountJob(job.id, {
       status: "running",
@@ -164,6 +177,7 @@ export function startAccountJobsWorker(options: AccountJobsWorkerOptions): Accou
       }
     } finally {
       running--;
+      if (isAgentJob) agentRunning = false;
     }
     return true;
   }
