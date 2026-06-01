@@ -565,7 +565,7 @@ function OpsToggle(props: { acc: AccountRecordView }) {
       disabled={m.isPending}
       title={on ? "运维开:点此暂停该账号的自动化(恢复/重绑)分配" : "运维已暂停:点此恢复该账号的自动化分配"}
       onChange={(v) => m.mutate({ accountId: props.acc.id, enabled: v })}
-      label={on ? undefined : "暂停"}
+      {...(on ? {} : { label: "暂停" })}
     />
   );
 }
