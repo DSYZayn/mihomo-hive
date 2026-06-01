@@ -1315,9 +1315,21 @@ export const appRouter = t.router({
       // 保存只覆盖 spec.codexTool 子树；其它字段保持原值（避免与其它面板编辑撞车）
       save: protectedProcedure
         .input(accountFleetSpecSchema.shape.codexTool)
-        .mutation(({ ctx, input }) => {
+        .mutation(async ({ ctx, input }) => {
           const current = ctx.repo.getAccountFleetSpec();
           const saved = ctx.repo.saveAccountFleetSpec({ ...current, codexTool: input });
+          // 动态出口(codexEgress)开关/参数变化时,mihomo 的 codex-egress 单口+组需要重渲染
+          // 才生效——否则改了 spec 但运行配置还是旧的(组是空的 → worker 切组 404)。
+          // best-effort 重渲染 + reload,失败不阻塞保存。
+          try {
+            const rendered = renderMihomoConfig(ctx.repo.listNodes(), ctx.config, codexEgressRenderOpts(ctx.repo));
+            await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+            await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
+            const status = await readMihomoStatus(ctx.config);
+            if (status.running) await reloadMihomo(ctx.config);
+          } catch (err) {
+            console.warn("codexTool.save 重渲染 mihomo 失败(不阻塞保存):", err instanceof Error ? err.message : err);
+          }
           if (ctx.accountFleetScheduler) {
             void ctx.accountFleetScheduler.triggerNow().catch(() => undefined);
           }
