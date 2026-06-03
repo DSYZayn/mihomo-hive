@@ -1,6 +1,6 @@
 import type React from "react";
 import { Activity, LogOut, Monitor, Moon, Network, Server, ShieldCheck, Sun } from "lucide-react";
-import { Badge, Button } from "../../components/ui.js";
+import { Badge, BrandMark, Button } from "../../components/ui.js";
 import type { Theme } from "../../hooks/useTheme.js";
 
 // "system" 是 P5-AK 引入的新 workspace（替代原 "runtime"）—— 把 Sub2API/codex-tool
@@ -35,7 +35,7 @@ export function RuntimeHeader(props: {
   return (
     <header className="app-header">
       <div className="brand">
-        <div className="brand-mark">MH</div>
+        <BrandMark size="sm" />
         <div>
           <h1>Mihomo Hive</h1>
           <p>固定出口节点池 · 账号自动注册与续登</p>

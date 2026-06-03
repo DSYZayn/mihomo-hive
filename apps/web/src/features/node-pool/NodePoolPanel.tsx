@@ -78,7 +78,7 @@ export function NodePoolPanel(props: {
       <Panel title="已保存订阅">
         <div className="subscription-list">
           {props.subscriptions.length === 0 ? (
-            <EmptyState title="还没有订阅源" description="输入订阅链接后先预览，再确认导入节点。" />
+            <EmptyState branded title="还没有订阅源" description="输入订阅链接后先预览，再确认导入节点。" />
           ) : (
             props.subscriptions.map((source) => (
               <div key={source.id} className="subscription-row-card">

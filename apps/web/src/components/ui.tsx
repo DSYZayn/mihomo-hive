@@ -3,6 +3,25 @@ import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, In
 
 export type Tone = "neutral" | "success" | "danger" | "warning" | "info";
 
+export function BrandMark(props: {
+  size?: "sm" | "md" | "lg" | "hero" | "empty";
+  className?: string;
+  decorative?: boolean;
+}) {
+  const size = props.size ?? "md";
+  return (
+    <span
+      className={`brand-mark-art brand-mark-art-${size} ${props.className ?? ""}`}
+      role={props.decorative ? undefined : "img"}
+      aria-label={props.decorative ? undefined : "Mihomo Hive"}
+      aria-hidden={props.decorative ? true : undefined}
+    >
+      <img className="brand-image brand-image-light" src="/brand/app-icon-light-512.png" alt="" draggable={false} />
+      <img className="brand-image brand-image-dark" src="/brand/app-icon-dark-512.png" alt="" draggable={false} />
+    </span>
+  );
+}
+
 export function Button(props: {
   children: React.ReactNode;
   icon?: React.ReactNode | undefined;
@@ -424,9 +443,11 @@ export function EmptyState(props: {
   title: string;
   description: string;
   action?: React.ReactNode;
+  branded?: boolean;
 }) {
   return (
-    <div className="empty-state">
+    <div className={`empty-state ${props.branded ? "empty-state-branded" : ""}`}>
+      {props.branded && !props.icon ? <BrandMark size="empty" decorative /> : null}
       {props.icon ? <div className="empty-icon">{props.icon}</div> : null}
       <h3>{props.title}</h3>
       <p>{props.description}</p>

@@ -40,6 +40,7 @@ export function OrchestrationStatusPanel(props: {
       <div className="orchestration-status-panel">
         <Panel title="编排状态">
           <EmptyState
+            branded
             title="先配置 Sub2API 连接"
             description="在左栏填写 Sub2API 地址 + 管理员 API Key 后，系统才会开始拉取真实数据并展示编排状态。"
           />
@@ -66,6 +67,7 @@ export function OrchestrationStatusPanel(props: {
       <div className="orchestration-status-panel">
         <Panel title="编排状态">
           <EmptyState
+            branded
             title="无法拉取编排状态"
             description="服务可能未启动或网络异常，5 秒后会自动重试。"
           />
@@ -83,6 +85,7 @@ export function OrchestrationStatusPanel(props: {
           hint="调和器在服务启动时自动开始运行，按设定的调和周期（默认 30 秒）工作。这里展示的是它最近一轮跑的快照。"
         >
           <EmptyState
+            branded
             title="调和器正在跑首次调和"
             description="服务刚启动，调和器自动开始第一轮工作（需要拉 Sub2API 代理 / 账号 / 错误信号）。一般 5–15 秒内出第一份数据，本页面 5 秒一次自动刷新。"
           />
@@ -171,6 +174,7 @@ function NodeMatrix(props: { intents: ReconcileNodeIntent[] }) {
     return (
       <Panel title="节点矩阵" className="status-pane-matrix">
         <EmptyState
+          branded
           title="还没有 Hive 托管节点参与编排"
           description="本地节点需先启用调度，并通过推送同步到 Sub2API 后才会出现在这里。"
         />

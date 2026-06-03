@@ -1,5 +1,5 @@
 import React from "react";
-import { Download, FileJson, HardDriveDownload, Info } from "lucide-react";
+import { Download, FileJson, HardDriveDownload } from "lucide-react";
 import type { Sub2ApiExportPreview } from "@mihomo-hive/schemas";
 import { Badge, Button, EmptyState, Panel, SelectInput, TextInput } from "../../components/ui.js";
 
@@ -48,7 +48,7 @@ export function ExportPanel(props: {
         </div>
         {props.selectedCount === 0 ? (
           <EmptyState
-            icon={<Info size={22} />}
+            branded
             title="还没有选择导出节点"
             description="在节点表格中筛选目标节点，然后选择要导出的节点。已分配端口的选中节点会进入 JSON。"
           />
@@ -74,7 +74,7 @@ export function ExportPanel(props: {
                 )}
               </pre>
             ) : (
-              <EmptyState title="当前选择没有可导出节点" description="请先选择已经分配端口的节点。" />
+              <EmptyState branded title="当前选择没有可导出节点" description="请先选择已经分配端口的节点。" />
             )}
           </div>
         )}

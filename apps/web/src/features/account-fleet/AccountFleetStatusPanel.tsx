@@ -375,6 +375,7 @@ function AccountMatrix(props: { accounts: AccountRecordView[]; lastTick: Account
     return (
       <Panel title="账号矩阵" className="status-pane-matrix">
         <EmptyState
+          branded
           title="账号池为空"
           description="开启自动维护后会按策略自动注册补给；也可在「设置与工具」导入存量 Sub2API 账号，或用上方「注册一批」立即补给。"
         />
@@ -399,7 +400,7 @@ function AccountMatrix(props: { accounts: AccountRecordView[]; lastTick: Account
     >
       {chipBar}
       {filtered.length === 0 ? (
-        <EmptyState title="没有符合条件的账号" description="换个筛选或清空搜索试试。" />
+        <EmptyState branded title="没有符合条件的账号" description="换个筛选或清空搜索试试。" />
       ) : (
         <div className="node-matrix-scroll">
           <table className="node-matrix-table account-matrix-table">
@@ -681,7 +682,7 @@ function RecentTicksCard(props: { ticks: AccountFleetTickSummary[]; lastTick: Ac
   if (props.ticks.length === 0) {
     return (
       <Panel title="巡检活动">
-        <EmptyState title="尚未跑过巡检" description="开启自动维护后每 5 分钟自动巡检一次。" />
+        <EmptyState branded title="尚未跑过巡检" description="开启自动维护后每 5 分钟自动巡检一次。" />
       </Panel>
     );
   }

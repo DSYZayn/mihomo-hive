@@ -246,7 +246,7 @@ export function NodeTable(props: {
 
       <div className="table-frame">
         {props.filteredNodes.length === 0 ? (
-          <EmptyState title="没有匹配的节点" description="调整筛选条件，或先完成订阅拉取和节点导入。" />
+          <EmptyState branded title="没有匹配的节点" description="调整筛选条件，或先完成订阅拉取和节点导入。" />
         ) : (
           <table className="node-table">
             <thead>
