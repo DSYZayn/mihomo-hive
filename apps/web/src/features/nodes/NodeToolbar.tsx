@@ -156,7 +156,7 @@ export function NodeToolbar(props: NodeToolbarProps) {
               !hasSelection
                 ? "请先在表格里勾选节点"
                 : canTestSelected
-                  ? `对所选 ${props.selectedCount} 个节点跑 OpenAI / Claude 连通性测试`
+                  ? `对所选 ${props.selectedCount} 个节点跑 OpenAI 连通性测试`
                   : "所选节点未分配端口，测试时会自动先分配端口并接入 Mihomo 再测"
             }
           >

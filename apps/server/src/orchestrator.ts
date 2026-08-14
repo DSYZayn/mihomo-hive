@@ -40,7 +40,7 @@ export function startReconcileScheduler(input: {
   repo: HiveRepository;
   config: RuntimeConfig;
 }): ReconcileSchedulerHandle {
-  const { repo } = input;
+  const { repo, config } = input;
   let stopped = false;
   let inFlight = false;
   let nextTimer: NodeJS.Timeout | undefined;
@@ -258,7 +258,7 @@ export function startReconcileScheduler(input: {
   scheduleSubscriptionRefresh();
 
   // 主动探测 prober 子循环：兜底"长期没流量节点"的健康信号盲区
-  const stopProber = startProberLoop(repo, () => repo.getOrchestrationSpec());
+  const stopProber = startProberLoop(repo, config, () => repo.getOrchestrationSpec());
 
   return {
     triggerNow: () => tick(),
@@ -331,6 +331,8 @@ interface ProbeState {
   ok: boolean;
   /** 失败原因 / 延迟（仅用于日志，不参与决策） */
   detail: string;
+  /** 失败发生在本地固定 listener，需要立即迁移账号。 */
+  localListenerDown?: boolean;
 }
 
 /** key = sub2apiProxyId（reconcile 用这个 id 关联） */
@@ -340,32 +342,74 @@ const probeStateByProxy = new Map<number, ProbeState>();
  * 跑一轮主动探测：对所有有 raw.server:port + 有 sub2apiProxyId 的节点做 L1 TCP 探测。
  * 把结果写入内存 probeStateByProxy 供下次 reconcile 合并到 healthSignals。
  */
-async function runActiveProbeRound(repo: HiveRepository, spec: OrchestrationSpec): Promise<void> {
+async function runActiveProbeRound(
+  repo: HiveRepository,
+  config: RuntimeConfig,
+  spec: OrchestrationSpec
+): Promise<void> {
   const policy = spec.health.activeProbe;
   if (!policy.enabled) return;
   const nodes = repo.listNodes().filter((n) => {
     if (!n.sub2apiProxyId) return false;
+    if (!n.assignedPort) return false;
     if (typeof n.raw?.server !== "string" || typeof n.raw?.port !== "number") return false;
     const lc = n.lifecycleStatus ?? "candidate";
-    // 探测 schedulable + 用户暂停状态的节点：前者关心健康，后者用户可能恢复要看是不是还活着
-    return lc === "schedulable" || lc === "disabled" || lc === "cooling_down";
+    // 所有仍关联 Sub2API 的非终态节点都要测，包括历史不一致的 candidate。
+    return lc !== "retired" && lc !== "deleted";
   });
   if (nodes.length === 0) return;
 
   await mapWithConcurrency(nodes, policy.concurrency, async (node) => {
+    const listenerHost = localProbeHost(config.listenHost);
+    let listenerResult = await measureProxyTcpLatency({
+      host: listenerHost,
+      port: Number(node.assignedPort),
+      timeoutMs: Math.min(policy.timeoutMs, 2_000)
+    });
+    // server 启动时 scheduler 略早于 Mihomo auto-boot，给 listener 一次短暂重试，
+    // 避免把正常启动窗口误记为故障并保留整个探测周期。
+    if (listenerResult.error !== null) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      listenerResult = await measureProxyTcpLatency({
+        host: listenerHost,
+        port: Number(node.assignedPort),
+        timeoutMs: Math.min(policy.timeoutMs, 2_000)
+      });
+    }
+    if (listenerResult.error !== null) {
+      probeStateByProxy.set(node.sub2apiProxyId!, {
+        at: Date.now(),
+        ok: false,
+        detail: `local_listener: ${listenerResult.error}`,
+        localListenerDown: true
+      });
+      return;
+    }
+
     const host = node.raw.server as string;
     const port = node.raw.port as number;
     const probeResult = await measureProxyTcpLatency({ host, port, timeoutMs: policy.timeoutMs });
     probeStateByProxy.set(node.sub2apiProxyId!, {
       at: Date.now(),
       ok: probeResult.error === null,
-      detail: probeResult.error ?? `${probeResult.latencyMs}ms`
+      detail: probeResult.error ?? `${probeResult.latencyMs}ms`,
+      localListenerDown: false
     });
   });
 }
 
+function localProbeHost(listenHost: string): string {
+  if (listenHost === "0.0.0.0") return "127.0.0.1";
+  if (listenHost === "::" || listenHost === "[::]") return "::1";
+  return listenHost;
+}
+
 /** prober 的全局调度：fire-and-forget；进程退出自然停止。 */
-function startProberLoop(repo: HiveRepository, getSpec: () => OrchestrationSpec): () => void {
+function startProberLoop(
+  repo: HiveRepository,
+  config: RuntimeConfig,
+  getSpec: () => OrchestrationSpec
+): () => void {
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
 
@@ -374,7 +418,7 @@ function startProberLoop(repo: HiveRepository, getSpec: () => OrchestrationSpec)
     const spec = getSpec();
     const interval = Math.max(30_000, spec.health.activeProbe.intervalMs);
     try {
-      await runActiveProbeRound(repo, spec);
+      await runActiveProbeRound(repo, config, spec);
     } catch (err) {
       console.warn("active probe round failed:", err);
     }
@@ -506,6 +550,7 @@ export function mergeProbeIntoSignals(
     if (state.ok) continue;
     const current = signals.get(proxyId)!;
     signals.set(proxyId, { errorsInWindow: current.errorsInWindow + policy.failureCountsAsErrors });
+    if (state.localListenerDown) signals.get(proxyId)!.localListenerDown = true;
   }
   return signals;
 }

@@ -312,7 +312,7 @@ function Dashboard(props: { onLogout: () => void }) {
     onError: (error) => failTask(setTask, pushToast, "节点删除失败", error.message)
   });
   const testNodes = trpc.nodes.test.useMutation({
-    onMutate: () => startTask(setTask, "正在批量测试", "正在使用 OpenAI / Claude 目标检查本地 listener 可用性。"),
+    onMutate: () => startTask(setTask, "正在批量测试", "正在使用 OpenAI 目标检查本地 listener 可用性。"),
     onSuccess: async (result) => {
       const tone = result.failed > 0 ? "warning" : "success";
       setTask({
@@ -767,6 +767,8 @@ function Dashboard(props: { onLogout: () => void }) {
     <main className="app-shell">
       <RuntimeHeader
         running={Boolean(runtimeStatus.data?.running)}
+        expectedListeners={runtimeStatus.data?.expectedListeners}
+        reachableListeners={runtimeStatus.data?.reachableListeners}
         nodes={allNodes.length}
         active={activeCount}
         assigned={assignedCount}

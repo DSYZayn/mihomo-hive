@@ -164,7 +164,7 @@ nodes
 nodes
   .command("test")
   .description("Test assigned local listener ports and update node status")
-  .option("--targets <targets>", "Comma-separated test targets: ip,openai,claude", "openai,claude")
+  .option("--targets <targets>", "Comma-separated test targets: ip,openai,claude", "openai")
   .option("--host <host>", "Listener host to test")
   .option("--timeout-ms <ms>", "Per-target timeout", parseIntegerOption, 15_000)
   .option("--concurrency <n>", "Parallel node tests", parseIntegerOption, 8)

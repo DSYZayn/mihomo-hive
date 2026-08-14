@@ -89,7 +89,28 @@ const protectedProcedure = t.procedure.use(({ ctx, next }) => {
 export const appRouter = t.router({
   runtime: t.router({
     config: protectedProcedure.query(({ ctx }) => ctx.config),
-    status: protectedProcedure.query(async ({ ctx }) => readMihomoStatus(ctx.config)),
+    status: protectedProcedure.query(async ({ ctx }) => {
+      const processStatus = await readMihomoStatus(ctx.config);
+      // PID 存活不等于固定出口 listener 完整。只核对仍关联 Sub2API
+      // 且未进入终态的节点，让页面能直接暴露"远端还在用，本地端口没了"。
+      const expectedPorts = ctx.repo
+        .listNodes()
+        .filter((node) => {
+          if (!node.sub2apiProxyId || !node.assignedPort) return false;
+          return node.lifecycleStatus !== "retired" && node.lifecycleStatus !== "deleted";
+        })
+        .map((node) => Number(node.assignedPort));
+      const listeningPorts = processStatus.running
+        ? await findOccupiedPorts(ctx.config.listenHost, expectedPorts)
+        : new Set<number>();
+      const missingListenerPorts = expectedPorts.filter((port) => !listeningPorts.has(port));
+      return {
+        ...processStatus,
+        expectedListeners: expectedPorts.length,
+        reachableListeners: expectedPorts.length - missingListenerPorts.length,
+        missingListenerPorts
+      };
+    }),
     /**
      * 紧急重建：基于当前 DB 状态重新渲染 mihomo.yaml + 启动/reload 进程。
      *
@@ -537,7 +558,10 @@ export const appRouter = t.router({
     test: protectedProcedure
       .input(
         z.object({
-          targets: z.array(z.string()).default(["openai", "claude"]),
+          // Sub2API 当前承载 OpenAI 账号，默认入池 gate 只用 OpenAI。
+          // Claude 仍可通过 API/CLI 显式传 targets=["claude"] 单独测试，
+          // 不能因为 Claude 不通就把 OpenAI 正常节点从调度池整体摘掉。
+          targets: z.array(z.string()).default(["openai"]),
           host: z.string().optional(),
           timeoutMs: z.number().int().positive().default(15_000),
           concurrency: z.number().int().positive().max(32).default(8),

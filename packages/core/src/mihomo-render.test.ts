@@ -43,6 +43,34 @@ describe("renderMihomoConfig", () => {
     expect(rendered.yaml).not.toContain("url-test");
     expect(rendered.yaml).not.toContain("fallback");
   });
+
+  it("keeps a failed but non-retired node listening until accounts can drain", () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    const failed: ProxyNode = {
+      hash: "failed00abcdef",
+      sourceId: "sample",
+      name: "failed-node",
+      originalName: "failed-node",
+      type: "ss",
+      region: "unknown",
+      raw: { type: "ss", server: "node.example.com", port: 443, cipher: "aes-128-gcm", password: "secret" },
+      status: "failed",
+      lifecycleStatus: "cooling_down",
+      schedulable: false,
+      protected: false,
+      sub2apiProxyId: 24,
+      assignedPort: 10002,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const rendered = renderMihomoConfig([failed], defaultRuntimeConfig);
+    expect(rendered.egressMap.map((item) => item.port)).toEqual([10002]);
+    expect(rendered.yaml).toContain("port: 10002");
+  });
 });
 
 describe("renderMihomoConfig codex-egress (外置 agent)", () => {

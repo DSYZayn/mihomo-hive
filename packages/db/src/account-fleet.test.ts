@@ -499,5 +499,23 @@ describe("HiveRepository account-fleet", () => {
       expect(n.codexLoginSuccess).toBe(1);
       expect(repo.setNodeCodexReserved("missing-hash", true)).toBe(false);
     });
+
+    it("subscription upsert preserves an existing node lifecycle intent", () => {
+      insertNode("node-cccccccc");
+      const existing = repo.listNodes().find((x) => x.hash === "node-cccccccc")!;
+      repo.upsertNodes([
+        {
+          ...existing,
+          name: "renamed by subscription",
+          lifecycleStatus: "candidate",
+          schedulable: false
+        }
+      ]);
+
+      const refreshed = repo.listNodes().find((x) => x.hash === "node-cccccccc")!;
+      expect(refreshed.name).toBe("renamed by subscription");
+      expect(refreshed.lifecycleStatus).toBe("schedulable");
+      expect(refreshed.schedulable).toBe(true);
+    });
   });
 });

@@ -339,10 +339,9 @@ export class HiveRepository {
         type = excluded.type,
         region = excluded.region,
         raw_json = excluded.raw_json,
-        lifecycle_status = CASE
-          WHEN nodes.lifecycle_status IN ('deleted', 'retired') THEN nodes.lifecycle_status
-          ELSE excluded.lifecycle_status
-        END,
+        -- 订阅刷新只更新节点元数据，不得把已有运维意图重置为 candidate。
+        -- 否则会产生 candidate + sub2api_proxy_id + intent=serving 的矛盾状态。
+        lifecycle_status = nodes.lifecycle_status,
         updated_at = excluded.updated_at
     `);
 

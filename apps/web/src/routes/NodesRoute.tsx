@@ -179,14 +179,14 @@ export function NodesRoute(props: NodesRouteProps) {
           onAttach={() => m.attachToMihomo.mutate({ hashes: props.selectedHashesList })}
           onTestSelected={() =>
             m.testNodes.mutate({
-              targets: ["openai", "claude"],
+              targets: ["openai"],
               timeoutMs: 15_000,
               concurrency: 8,
               hashes: props.selectedHashesList
             })
           }
           onTestAll={() =>
-            m.testNodes.mutate({ targets: ["openai", "claude"], timeoutMs: 15_000, concurrency: 8 })
+            m.testNodes.mutate({ targets: ["openai"], timeoutMs: 15_000, concurrency: 8 })
           }
           onEnableSelected={() => {
             const total = selectedNodes.length;

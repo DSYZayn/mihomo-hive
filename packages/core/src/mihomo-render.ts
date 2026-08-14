@@ -44,8 +44,10 @@ export function renderMihomoConfig(
       if (!node.assignedPort) return false;
       const lifecycle = node.lifecycleStatus ?? "candidate";
       if (lifecycle === "retired" || lifecycle === "deleted") return false;
-      // status === "failed" 的节点不渲染（连测都失败了）；untested / active 都行
-      return node.status !== "failed";
+      // 不能因为一次业务目标测试失败就拆掉 listener：Sub2API 可能仍有账号
+      // 绑在这个固定端口。账号应先由 reconcile 迁走，节点进入 retired/deleted
+      // 终态后才可移除 listener，避免制造 connection refused 型全量故障。
+      return true;
     })
     .sort((a, b) => Number(a.assignedPort) - Number(b.assignedPort));
 

@@ -22,6 +22,8 @@ const tabs: WorkspaceTab[] = [
 
 export function RuntimeHeader(props: {
   running: boolean;
+  expectedListeners?: number | undefined;
+  reachableListeners?: number | undefined;
   nodes: number;
   active: number;
   assigned: number;
@@ -32,6 +34,8 @@ export function RuntimeHeader(props: {
   onThemeChange: (next: Theme) => void;
   onLogout: () => void;
 }) {
+  const missingListeners = Math.max(0, (props.expectedListeners ?? 0) - (props.reachableListeners ?? 0));
+  const runtimeHealthy = props.running && missingListeners === 0;
   return (
     <header className="app-header">
       <div className="brand">
@@ -64,7 +68,12 @@ export function RuntimeHeader(props: {
         ))}
       </nav>
       <div className="header-metrics">
-        <HeaderMetric icon={<Server size={16} />} label="Mihomo" value={props.running ? "运行中" : "未运行"} ok={props.running} />
+        <HeaderMetric
+          icon={<Server size={16} />}
+          label="Mihomo"
+          value={!props.running ? "未运行" : missingListeners > 0 ? `缺失 ${missingListeners}` : "运行中"}
+          ok={runtimeHealthy}
+        />
         <HeaderMetric icon={<Network size={16} />} label="节点" value={String(props.nodes)} />
         <HeaderMetric icon={<Activity size={16} />} label="可用" value={String(props.active)} ok={props.active > 0} />
         <HeaderMetric icon={<ShieldCheck size={16} />} label="端口" value={String(props.assigned)} />

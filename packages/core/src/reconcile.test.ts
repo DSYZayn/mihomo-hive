@@ -392,9 +392,55 @@ describe("reconcile", () => {
     expect(result.nodeIntents.find((i) => i.hash === "n1xxxxxx")?.intentRole).toBe("evicted");
     expect(result.plannedChanges.find((c) => c.accountId === 10)?.kind).toBe("rebind_dead");
   });
+
+  it("failed/candidate 矛盾节点不得继续 serving，遗留账号必须迁出", () => {
+    const proxies = [buildProxy({ id: 1 }), buildProxy({ id: 2 })];
+    const broken = buildNode({
+      hash: "n1xxxxxx",
+      sub2apiProxyId: 1,
+      intentRole: "serving",
+      lifecycleStatus: "candidate",
+      status: "failed",
+      schedulable: false
+    });
+    const healthy = buildNode({ hash: "n2xxxxxx", sub2apiProxyId: 2 });
+    const result = reconcile({
+      now: NOW,
+      spec: defaultOrchestrationSpec,
+      localNodes: [broken, healthy],
+      remoteProxies: proxies,
+      remoteAccounts: [buildAccount({ id: 10, proxy_id: 1 })],
+      managedProxyPrefix: PREFIX
+    });
+
+    expect(result.nodeIntents.find((i) => i.hash === broken.hash)?.intentRole).toBe("evicted");
+    expect(result.plannedChanges.find((c) => c.accountId === 10)?.kind).toBe("rebind_dead");
+    expect(result.plannedChanges.find((c) => c.accountId === 10)?.toProxyId).toBe(2);
+  });
 });
 
 describe("reconcile health state machine", () => {
+  it("本地 listener 消失时立即 evict 并迁出账号，不等待普通 backoff", () => {
+    const proxies = [buildProxy({ id: 1 }), buildProxy({ id: 2 })];
+    const localNodes = [
+      buildNode({ hash: "n1xxxxxx", sub2apiProxyId: 1, intentRole: "serving" }),
+      buildNode({ hash: "n2xxxxxx", sub2apiProxyId: 2, intentRole: "serving" })
+    ];
+    const result = reconcile({
+      now: NOW,
+      spec: defaultOrchestrationSpec,
+      localNodes,
+      remoteProxies: proxies,
+      remoteAccounts: [buildAccount({ id: 100, proxy_id: 1 })],
+      managedProxyPrefix: PREFIX,
+      healthSignals: new Map([[1, { errorsInWindow: 5, localListenerDown: true }]])
+    });
+
+    expect(result.nodeIntents.find((n) => n.proxyId === 1)?.intentRole).toBe("evicted");
+    expect(result.nodeIntents.find((n) => n.proxyId === 1)?.nextAction).toContain("listener");
+    expect(result.plannedChanges.find((c) => c.accountId === 100)?.kind).toBe("rebind_dead");
+  });
+
   it("serving node with errors over budget enters quarantined + records backoff", () => {
     const proxies = [buildProxy({ id: 1 }), buildProxy({ id: 2 })];
     const localNodes = [

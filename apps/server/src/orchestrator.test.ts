@@ -141,6 +141,13 @@ describe("mergeProbeIntoSignals 主动探测信号合并（P5-AB）", () => {
     expect(signals.get(1)?.errorsInWindow).toBe(5);
   });
 
+  it("本地 listener 失败会保留立即迁移信号", () => {
+    const signals = new Map<number, ProxyHealthSignal>();
+    const probes = new Map([[1, { at: NOW, ok: false, detail: "ECONNREFUSED", localListenerDown: true }]]);
+    mergeProbeIntoSignals(signals, probes, POLICY, WINDOW_MS, NOW);
+    expect(signals.get(1)).toEqual({ errorsInWindow: 5, localListenerDown: true });
+  });
+
   it("探测窗口内失败 + upstream-errors 已有计数 → 累加", () => {
     const signals = new Map<number, ProxyHealthSignal>([[1, { errorsInWindow: 3 }]]);
     const probes = new Map([[1, { at: NOW, ok: false, detail: "timeout" }]]);

@@ -16,6 +16,8 @@ export interface ProxyHealthSignal {
   // 窗口内 Sub2API 上游错误条数（5xx / 429 / timeout 等）。
   // Sub2API 没有"总请求数"接口，所以这里用绝对错误数当主信号。
   errorsInWindow: number;
+  /** 本地固定 listener 不可达；这是立即迁移信号，不走普通上游错误退避。 */
+  localListenerDown?: boolean;
 }
 
 export interface ReconcileInput {
@@ -218,6 +220,19 @@ function decideNodeRoles(world: ObservedWorld): { decisions: NodeRoleDecision[];
       // role 仍叫 "paused" 保持 schema 稳定；UI 通过 RoleBadge 映射显示"已锁定"
       role = "paused";
       nextAction = "已锁定，账号留原地不迁、不接新；需要主动启用调度才恢复";
+    } else if (
+      local.status === "failed" ||
+      !local.schedulable ||
+      local.lifecycleStatus === "candidate" ||
+      local.lifecycleStatus === "testing"
+    ) {
+      // 防御不一致状态：历史订阅刷新/手动测试可能留下
+      // candidate + sub2apiProxyId + intent=serving 这种组合。只要本地已明确
+      // 不可调度或测试失败，就不能继续承载账号。
+      role = "evicted";
+      nextAction = local.status === "failed"
+        ? "节点测试失败，等待账号全部迁出"
+        : "节点未启用调度，等待清理遗留绑定";
     } else {
       // 状态机入口：根据 local 当前角色 + healthSignals 决定下一态
       const previousRole = local.intentRole ?? (local.lifecycleStatus === "schedulable" ? "serving" : "standby");
@@ -234,7 +249,14 @@ function decideNodeRoles(world: ObservedWorld): { decisions: NodeRoleDecision[];
         healthScore = Math.max(0, Math.min(100, 100 - errors * 5));
       }
 
-      if (previousRole === "evicted") {
+      if (signal?.localListenerDown) {
+        // listener 消失意味着 Sub2API 必然 connection refused，留在 quarantined
+        // 不迁账号只会延长故障。只要还有其他 serving 节点就立即迁出。
+        role = "evicted";
+        healthScore = 0;
+        backoffUntilIso = null;
+        nextAction = "本地 listener 不可达，立即迁出账号";
+      } else if (previousRole === "evicted") {
         role = "evicted";
         nextAction = "已驱逐，等待人工恢复或重置";
       } else if (previousRole === "quarantined" && backoffStillActive) {
@@ -330,17 +352,11 @@ function countCandidateServing(world: ObservedWorld): number {
     if (!world.managedProxyIds.has(proxy.id)) continue;
     const local = world.localByProxyId.get(proxy.id);
     if (!local) continue;
+    if (local.status === "failed") continue;
+    if (!local.schedulable) continue;
+    if (local.lifecycleStatus !== "schedulable") continue;
     if (local.intentRole === "evicted") continue;
     if (local.intentRole === "paused") continue;
-    // 排除手动下线 lifecycle（这些节点 reconcile 会判 evicted/paused，但 intent_role 可能还没刷新）
-    if (
-      local.lifecycleStatus === "retired" ||
-      local.lifecycleStatus === "deleted" ||
-      local.lifecycleStatus === "draining" ||
-      local.lifecycleStatus === "disabled" ||
-      local.lifecycleStatus === "cooling_down"
-    )
-      continue;
     count += 1;
   }
   return count;
