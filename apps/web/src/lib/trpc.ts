@@ -1,10 +1,19 @@
 import { createTRPCReact, httpBatchLink } from "@trpc/react-query";
-import { QueryClient } from "@tanstack/react-query";
+import { MutationCache, QueryClient } from "@tanstack/react-query";
 import type { AppRouter } from "../../../server/src/router.js";
 
 export const trpc = createTRPCReact<AppRouter>();
 
 export const queryClient = new QueryClient({
+  // 统一保证所有写操作完成后，当前页面立即读取服务端真值。
+  // 这样即使某个 mutation 忘了单独 invalidate，也不会要求用户手动刷新网页。
+  mutationCache: new MutationCache({
+    onSuccess: async () => {
+      // invalidate 在 staleTime=Infinity 的 query 上只标记过期；直接 refetch
+      // 保证写操作完成后当前页面马上读到服务端真值。
+      await queryClient.refetchQueries({ type: "active" });
+    }
+  }),
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,

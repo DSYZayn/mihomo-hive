@@ -14,7 +14,6 @@ import {
   filterPreviewImportableNodes,
   filteredExistingNodeHashes,
   findOccupiedPorts,
-  groupAssignmentChangesByProxy,
   isManagedProxy,
   mapLocalNodesToSub2ApiProxies,
   parseCodexAccountListEnvelope,
@@ -40,7 +39,6 @@ import {
   nodeDeletionPlanSchema,
   orchestrationSpecSchema,
   sub2ApiAccountFiltersSchema,
-  sub2ApiAssignmentApplyResultSchema,
   sub2ApiAssignmentOptionsSchema,
   sub2ApiConnectionConfigSchema,
   sub2ApiExportRequestSchema,
@@ -85,6 +83,13 @@ const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   }
   return next();
 });
+
+function accountProxyWritesDisabledError(): TRPCError {
+  return new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: "账号代理自动迁移已禁用。Mihomo Hive 只验活节点并幂等推送代理，不会更换账号出口。"
+  });
+}
 
 export const appRouter = t.router({
   runtime: t.router({
@@ -779,7 +784,9 @@ export const appRouter = t.router({
         const [proxies, accounts] = await Promise.all([client.listAllProxies(), client.listAllAccounts(input.filters)]);
         return planSub2ApiAssignments({ proxies, accounts, options: input });
       }),
-      applyChanges: protectedProcedure.input(sub2ApiAssignmentOptionsSchema).mutation(async ({ ctx, input }) => applySub2ApiAssignment(ctx.repo, input))
+      applyChanges: protectedProcedure.input(sub2ApiAssignmentOptionsSchema).mutation(async () => {
+        throw accountProxyWritesDisabledError();
+      })
     }),
     sync: protectedProcedure.mutation(async ({ ctx }) => {
       const client = createConfiguredSub2ApiClient(ctx.repo);
@@ -809,62 +816,11 @@ export const appRouter = t.router({
           managedProxyPrefix: connection?.managedProxyPrefix ?? "MH-"
         });
       }),
-      drainManaged: protectedProcedure.mutation(async ({ ctx }) => {
-        const client = createConfiguredSub2ApiClient(ctx.repo);
-        const connection = ctx.repo.getSub2ApiConnection();
-        const [proxies, accounts] = await Promise.all([
-          client.listAllProxies(),
-          client.listAllAccounts(sub2ApiAccountFiltersSchema.parse({ status: "" }))
-        ]);
-        const preview = planSub2ApiManagedMaintenance({
-          proxies,
-          accounts,
-          protectedRule: ctx.repo.getSub2ApiProtectedRule(),
-          managedProxyPrefix: connection?.managedProxyPrefix ?? "MH-"
-        });
-        if (preview.risks.length > 0) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: preview.risks.join("；") });
-        }
-        const results = [];
-        for (const batch of groupAssignmentChangesByProxy(preview.drainPlan.changes)) {
-          results.push(await client.bulkUpdateProxy(batch.accountIds, batch.proxyId));
-        }
-        return {
-          preview,
-          reassigned: results.reduce((sum, item) => sum + item.success, 0),
-          failedReassign: results.reduce((sum, item) => sum + item.failed, 0),
-          deletedProxies: 0,
-          failedDeleteProxies: []
-        };
+      drainManaged: protectedProcedure.mutation(async () => {
+        throw accountProxyWritesDisabledError();
       }),
-      cleanupEmpty: protectedProcedure.mutation(async ({ ctx }) => {
-        const client = createConfiguredSub2ApiClient(ctx.repo);
-        const connection = ctx.repo.getSub2ApiConnection();
-        const [proxies, accounts] = await Promise.all([
-          client.listAllProxies(),
-          client.listAllAccounts(sub2ApiAccountFiltersSchema.parse({ status: "" }))
-        ]);
-        const preview = planSub2ApiManagedMaintenance({
-          proxies,
-          accounts,
-          protectedRule: ctx.repo.getSub2ApiProtectedRule(),
-          managedProxyPrefix: connection?.managedProxyPrefix ?? "MH-"
-        });
-        let deletedProxies = 0;
-        const failedDeleteProxies = [];
-        for (const proxy of preview.emptyManagedProxies) {
-          try {
-            await client.deleteProxy(proxy.id);
-            deletedProxies += 1;
-          } catch (error) {
-            failedDeleteProxies.push({
-              proxyId: proxy.id,
-              name: proxy.name,
-              message: error instanceof Error ? error.message : "未知错误"
-            });
-          }
-        }
-        return { preview, reassigned: 0, failedReassign: 0, deletedProxies, failedDeleteProxies };
+      cleanupEmpty: protectedProcedure.mutation(async () => {
+        throw accountProxyWritesDisabledError();
       })
     }),
     automation: t.router({
@@ -1227,68 +1183,8 @@ export const appRouter = t.router({
         }),
       applyStrategySwitch: protectedProcedure
         .input(z.object({ target: z.enum(["stable-hash", "rendezvous-hash"]) }))
-        .mutation(async ({ ctx, input }) => {
-          const connection = ctx.repo.getSub2ApiConnection();
-          if (!connection) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "请先配置 Sub2API 连接。" });
-          const client = createSub2ApiClient(connection);
-          const [proxies, accounts] = await Promise.all([
-            client.listAllProxies(),
-            client.listAllAccounts(sub2ApiAccountFiltersSchema.parse({ status: "" }))
-          ]);
-          const spec = ctx.repo.getOrchestrationSpec();
-          const servingProxyIds = new Set(
-            ctx.repo
-              .listNodes()
-              .filter((n) => n.sub2apiProxyId && (n.intentRole === "serving" || n.lifecycleStatus === "schedulable"))
-              .map((n) => n.sub2apiProxyId!)
-          );
-          const plan = planStrategySwitch({
-            spec,
-            targetStrategy: input.target,
-            proxies,
-            accounts,
-            managedProxyPrefix: connection.managedProxyPrefix,
-            servingProxyIds
-          });
-
-          const job = createJob(
-            "sub2api.automation.strategySwitch",
-            `切换哈希策略 ${plan.fromStrategy} → ${plan.toStrategy}`,
-            `一次性大规模迁移：${plan.affectedAccounts} 个账号`,
-            ["执行批量绑定", "保存策略到 Spec"]
-          );
-          try {
-            // 按 toProxyId 分组 bulkUpdate
-            updateJobStep(job.id, 0, "running", `执行 ${plan.affectedAccounts} 个变更`);
-            const groups = new Map<number, number[]>();
-            for (const change of plan.changes) {
-              const list = groups.get(change.toProxyId) ?? [];
-              list.push(change.accountId);
-              groups.set(change.toProxyId, list);
-            }
-            let success = 0;
-            let failed = 0;
-            for (const [toProxyId, accountIds] of groups) {
-              const result = await client.bulkUpdateProxy(accountIds, toProxyId);
-              success += result.success;
-              failed += result.failed;
-            }
-            updateJobStep(job.id, 0, "success", `成功 ${success}，失败 ${failed}`);
-
-            updateJobStep(job.id, 1, "running", "保存新策略到 Spec");
-            ctx.repo.saveOrchestrationSpec({
-              ...spec,
-              stickiness: { ...spec.stickiness, strategy: input.target }
-            });
-            updateJobStep(job.id, 1, "success", "Spec 已更新");
-
-            finishJob(job.id, "success", `${input.target} 上线：迁移 ${success} 个账号`);
-            return { plan, success, failed, operationId: job.id };
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "未知错误";
-            finishJob(job.id, "failed", message);
-            throw err;
-          }
+        .mutation(async () => {
+          throw accountProxyWritesDisabledError();
         })
     }),
     reconcile: t.router({
@@ -1298,16 +1194,8 @@ export const appRouter = t.router({
         const preview = planSub2ApiAssignments({ proxies, accounts, options: input });
         return { ...preview, mode: "steady_balance" as const, affectedNodeHashes: [], risks: preview.errors };
       }),
-      applyChanges: protectedProcedure.input(sub2ApiAssignmentOptionsSchema).mutation(async ({ ctx, input }) => {
-        const operationId = createJob("sub2api.reconcile", "正在协调 Sub2API 账号绑定", "重新读取账号与代理后执行确定性绑定。").id;
-        try {
-          const result = await applySub2ApiAssignment(ctx.repo, input);
-          finishJob(operationId, "success", `成功 ${result.success} 个，失败 ${result.failed} 个。`);
-          return { ...result, operationId };
-        } catch (error) {
-          finishJob(operationId, "failed", error instanceof Error ? error.message : "未知错误");
-          throw error;
-        }
+      applyChanges: protectedProcedure.input(sub2ApiAssignmentOptionsSchema).mutation(async () => {
+        throw accountProxyWritesDisabledError();
       })
     }),
     jobs: t.router({
@@ -1981,48 +1869,6 @@ function budgetWindowKeyUtc(at: Date, kind: "day" | "month"): string {
 }
 
 export type AppRouter = typeof appRouter;
-
-async function applySub2ApiAssignment(repo: HiveRepository, input: z.infer<typeof sub2ApiAssignmentOptionsSchema>) {
-  const client = createConfiguredSub2ApiClient(repo);
-  const [proxies, accounts] = await Promise.all([client.listAllProxies(), client.listAllAccounts(input.filters)]);
-  const preview = planSub2ApiAssignments({ proxies, accounts, options: input });
-  if (preview.errors.length > 0) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: preview.errors.join("；") });
-  }
-
-  const results = [];
-  const successIds: number[] = [];
-  const failedIds: number[] = [];
-  for (const batch of groupAssignmentChangesByProxy(preview.changes)) {
-    const result = await client.bulkUpdateProxy(batch.accountIds, batch.proxyId);
-    successIds.push(...result.successIds);
-    failedIds.push(...result.failedIds);
-    for (const item of result.results) {
-      results.push({ ...item, proxyId: batch.proxyId });
-    }
-    for (const id of result.successIds) {
-      if (!results.some((item) => item.accountId === id)) {
-        results.push({ accountId: id, proxyId: batch.proxyId, success: true });
-      }
-    }
-    for (const id of result.failedIds) {
-      if (!results.some((item) => item.accountId === id)) {
-        results.push({ accountId: id, proxyId: batch.proxyId, success: false });
-      }
-    }
-  }
-
-  const finalSuccessIds = Array.from(new Set([...successIds, ...results.filter((item) => item.success).map((item) => item.accountId)]));
-  const finalFailedIds = Array.from(new Set([...failedIds, ...results.filter((item) => !item.success).map((item) => item.accountId)]));
-  return sub2ApiAssignmentApplyResultSchema.parse({
-    preview,
-    success: finalSuccessIds.length,
-    failed: finalFailedIds.length,
-    successIds: finalSuccessIds,
-    failedIds: finalFailedIds,
-    results
-  });
-}
 
 function summarizeSubscription(source: SubscriptionSource) {
   const { lastContent, ...safeSource } = source;

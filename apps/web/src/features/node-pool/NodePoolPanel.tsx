@@ -169,7 +169,7 @@ function ImportPreviewDialog(props: {
         <section className="dialog-section">
           <header>
             <strong>过滤关键词</strong>
-            <span className="muted small">命中关键词的节点不会导入；已存在的同名/同 hash 节点也会被标记从池中删除。</span>
+            <span className="muted small">命中关键词的节点不会导入；未托管的同 hash 节点会从池中删除，已推送到 Sub2API 的节点会保留。</span>
           </header>
           <div className="keyword-chips">
             {keywords.length === 0 ? (
@@ -256,7 +256,7 @@ function DeletePlanDialog(props: { plan: NodeDeletionPlan; onClose: () => void; 
         {props.plan.blockingAccounts.length > 0 ? (
           <div className="warning-box">
             <AlertTriangle size={18} />
-            <span>仍有 {props.plan.blockingAccounts.length} 个账号绑定到这些代理。请先在代理编排页应用重绑定计划。</span>
+            <span>仍有 {props.plan.blockingAccounts.length} 个账号绑定到这些代理。请先在 Sub2API 侧完成迁移，再删除节点。</span>
           </div>
         ) : (
           <div className="success-box">

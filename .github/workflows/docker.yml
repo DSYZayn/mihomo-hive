@@ -1,15 +1,9 @@
-name: Docker Image
+name: Build and publish Docker image
 
 on:
-  # 推 main 后等 CI workflow 跑完再触发；CI 失败时这个 workflow 的 job 会被跳过。
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: ["main"]
-  # Tag push 视为已经过测试的发布，直接构建。
   push:
+    branches: [main]
     tags: ["v*.*.*"]
-  # 手动触发后门（用于救火 / 重发）。
   workflow_dispatch:
 
 permissions:
@@ -19,89 +13,16 @@ permissions:
 env:
   IMAGE_NAME: ghcr.io/nekroai/mihomo-hive
 
-# 优化历史：原来 amd64 + arm64 同 job 跑，arm64 走 QEMU 在 x86 runner 上模拟，
-# 单 arm64 编译 5m56s（amd64 native 仅 35s），总时长 ~6m。
-# 现拆双 job 各自 native：amd64 跑 ubuntu-latest，arm64 跑 ubuntu-24.04-arm
-# （GitHub 为公共仓库免费提供的 ARM64 runner）。两 job 并行后总时长 ~2m。
-# 每 job push by-digest，最后 merge job 合并出 multi-arch manifest。
-
 jobs:
-  build:
-    name: Build ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
-            platform_pair: linux-amd64
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
-            platform_pair: linux-arm64
-    runs-on: ${{ matrix.runner }}
-    # workflow_run 触发时只在 CI 成功后继续；其他触发器无条件构建。
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+  docker:
+    name: Build and publish multi-arch image
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          # workflow_run 触发时 checkout 的是触发 CI 的那个 commit。
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-
-      - name: Build and push by digest
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # 各自 push 不带 tag，只输出 digest；最后 merge job 用 imagetools 拼 manifest。
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          # 单架构 cache key，避免双 job 互踩缓存。
-          cache-from: type=gha,scope=docker-${{ matrix.platform_pair }}
-          cache-to: type=gha,mode=max,scope=docker-${{ matrix.platform_pair }}
-
-      - name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: digests-${{ matrix.platform_pair }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  merge:
-    name: Merge multi-arch manifest
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download digest artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: /tmp/digests
-          pattern: digests-*
-          merge-multiple: true
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -123,12 +44,16 @@ jobs:
             type=sha,prefix=main-
             type=ref,event=tag
 
-      - name: Create manifest list and push
-        working-directory: /tmp/digests
-        run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=docker
+          cache-to: type=gha,mode=max,scope=docker
 
-      - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+      - name: Inspect published image
+        run: docker buildx imagetools inspect "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"

@@ -437,7 +437,7 @@ function targetLabel(targetId: string): string {
 function Sub2ApiCell(props: { node: ProxyNode; proxy: Sub2ApiProxyRecord | undefined; connected: boolean }) {
   if (!props.connected) {
     return (
-      <span className="sub2api-cell muted" title="Sub2API 连接未配置；在代理编排页配置后此处会显示远端状态。">
+      <span className="sub2api-cell muted" title="Sub2API 连接未配置；在设置与工具页配置后此处会显示远端状态。">
         <MinusCircle size={14} aria-hidden="true" />
         <span className="small">未连接</span>
       </span>

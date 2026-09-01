@@ -3,13 +3,17 @@ import {
   createSub2ApiClient,
   filterPreviewImportableNodes,
   filteredExistingNodeHashes,
+  mapLocalNodesToSub2ApiProxies,
   mapWithConcurrency,
   measureProxyTcpLatency,
   reconcile,
+  resolveProxyTestTargets,
+  testProxyTarget,
   type ProxyHealthSignal,
   type ReconcileSkippedReason,
   type Sub2ApiClient
 } from "@mihomo-hive/core";
+import { exportSub2Api as buildSub2ApiExport } from "@mihomo-hive/exporters";
 import { HiveRepository } from "@mihomo-hive/db";
 import {
   reconcileObservedSummarySchema,
@@ -29,10 +33,81 @@ export interface ReconcileSchedulerHandle {
   stop: () => void;
 }
 
+export interface NodeMaintenanceRun {
+  refreshedSubscriptions: number;
+  checkedNodes: number;
+  passedNodes: number;
+  failedNodes: number;
+  pushedNodes: number;
+  mappedNodes: number;
+}
+
 /**
- * 启动后台 reconcile 调度器（ADR 0003 阶段 A）：
+ * 精简版后台维护器：只负责订阅幂等刷新、节点验活和 Sub2API 代理同步。
+ * 它绝不会读取账号列表，也不会调用 bulk-update，因此不会改变任何账号的出口绑定。
+ */
+export function startNodeMaintenanceScheduler(input: {
+  repo: HiveRepository;
+  config: RuntimeConfig;
+}): { triggerNow: () => Promise<NodeMaintenanceRun>; stop: () => void } {
+  const { repo, config } = input;
+  let stopped = false;
+  let inFlight = false;
+  let timer: NodeJS.Timeout | undefined;
+  let initialTimer: NodeJS.Timeout | undefined;
+  let lastSubscriptionRefreshAt = 0;
+
+  async function run(): Promise<NodeMaintenanceRun> {
+    if (inFlight) {
+      return { refreshedSubscriptions: 0, checkedNodes: 0, passedNodes: 0, failedNodes: 0, pushedNodes: 0, mappedNodes: 0 };
+    }
+    inFlight = true;
+    try {
+      // 进程启动后先把旧版本留下的重复节点合并，即使自动订阅刷新被关闭也能完成一次迁移。
+      repo.deduplicateNodesByIdentity();
+      const spec = repo.getOrchestrationSpec();
+      let refreshedSubscriptions = 0;
+      const fetchInterval = Math.max(60_000, spec.supply.fetchIntervalMs);
+      if (spec.supply.autoFetchSubscriptions && spec.supply.fetchIntervalMs > 0 && Date.now() - lastSubscriptionRefreshAt >= fetchInterval) {
+        refreshedSubscriptions = await refreshSubscriptions(repo);
+        lastSubscriptionRefreshAt = Date.now();
+      }
+
+      const health = await checkAndPersistNodeHealth(repo, config);
+      const pushed = await pushHealthyNodes(repo, config);
+      return { refreshedSubscriptions, ...health, ...pushed };
+    } finally {
+      inFlight = false;
+    }
+  }
+
+  function scheduleNext(): void {
+    if (stopped) return;
+    timer = setTimeout(() => {
+      void run().finally(scheduleNext);
+    }, 60_000);
+    timer.unref?.();
+  }
+
+  // 等待 server 完成 Mihomo auto-boot，避免启动窗口把所有 listener 误判为失败。
+  initialTimer = setTimeout(() => {
+    void run().finally(scheduleNext);
+  }, 15_000);
+  initialTimer.unref?.();
+  return {
+    triggerNow: run,
+    stop: () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (initialTimer) clearTimeout(initialTimer);
+    }
+  };
+}
+
+/**
+ * 启动兼容性的只读 reconcile 调度器（旧 API 保留）：
  *  - 周期触发（spec.reconcileIntervalMs）
- *  - paused 时仍跑前 4 步，仅 step 5 跳过（dry-run）
+ *  - 不再执行任何账号 proxy_id 写入，仅记录观察/计划结果
  *  - 单实例锁，避免并发 tick 互踩
  *  - 每个 tick 持久化到 reconcile_ticks
  */
@@ -93,28 +168,11 @@ export function startReconcileScheduler(input: {
         healthSignals
       });
 
-      let executedTotal = 0;
-      let errorMessage: string | undefined;
-      let executedChanges = result.appliedChanges;
-
-      if (result.appliedChanges.length > 0) {
-        const groups = new Map<number, number[]>();
-        for (const change of result.appliedChanges) {
-          const list = groups.get(change.toProxyId) ?? [];
-          list.push(change.accountId);
-          groups.set(change.toProxyId, list);
-        }
-        try {
-          for (const [toProxyId, accountIds] of groups) {
-            await client.bulkUpdateProxy(accountIds, toProxyId);
-            executedTotal += accountIds.length;
-          }
-        } catch (err) {
-          errorMessage = err instanceof Error ? err.message : "未知错误";
-          // 失败时只记录已成功的那部分（取消未执行的）
-          executedChanges = result.appliedChanges.slice(0, executedTotal);
-        }
-      }
+      // 旧版账号调和器仍保留用于只读审计，但绝不写入账号 proxy_id。
+      // 账号出口由 Sub2API 现状保持不变，节点维护器负责验活和幂等推送。
+      const executedTotal = 0;
+      const errorMessage = result.appliedChanges.length > 0 ? "账号代理自动迁移已禁用" : undefined;
+      const executedChanges: typeof result.appliedChanges = [];
 
       // 把 nodeIntents 写回本地节点（更新 intent_role / backoff / health_score）
       writeBackNodeIntents(repo, result.nodeIntents, localNodes);
@@ -608,8 +666,9 @@ function retireOldEvicted(repo: HiveRepository, spec: OrchestrationSpec, now: Da
  *
  * 不抛错；单个订阅失败只跳过它，其他继续。
  */
-async function refreshSubscriptions(repo: HiveRepository): Promise<void> {
+async function refreshSubscriptions(repo: HiveRepository): Promise<number> {
   const sources = repo.listSubscriptions().filter((source) => source.enabled);
+  let refreshed = 0;
   for (const source of sources) {
     try {
       const content = await repo.fetchSubscriptionContent(source);
@@ -633,6 +692,7 @@ async function refreshSubscriptions(repo: HiveRepository): Promise<void> {
       });
       if (deleteHashes.length > 0) repo.deleteNodes(deleteHashes);
       if (importable.length > 0) repo.upsertNodes(importable);
+      refreshed += 1;
       console.log(
         `subscription auto-refresh "${source.name}": imported ${importable.length}, deletedByFilter ${deleteHashes.length}`
       );
@@ -640,4 +700,101 @@ async function refreshSubscriptions(repo: HiveRepository): Promise<void> {
       console.warn(`subscription "${source.name}" refresh failed:`, err);
     }
   }
+  const deduplicated = repo.deduplicateNodesByIdentity();
+  if (deduplicated > 0) {
+    console.log(`subscription auto-refresh: merged ${deduplicated} duplicate node(s)`);
+  }
+  return refreshed;
+}
+
+async function checkAndPersistNodeHealth(repo: HiveRepository, config: RuntimeConfig): Promise<{
+  checkedNodes: number;
+  passedNodes: number;
+  failedNodes: number;
+}> {
+  const nodes = repo
+    .listNodes()
+    .filter((node) => Boolean(node.assignedPort))
+    .filter((node) => node.lifecycleStatus !== "retired" && node.lifecycleStatus !== "deleted" && node.lifecycleStatus !== "disabled");
+  if (nodes.length === 0) return { checkedNodes: 0, passedNodes: 0, failedNodes: 0 };
+
+  const results = await mapWithConcurrency(nodes, 8, async (node) => {
+    // 以本地 listener 为主：URI 订阅节点可能没有展开的 server/port 字段，
+    // 但只要 Mihomo listener 可达就应视为可用候选，不因解析形式误杀。
+    const listenerResult = await measureProxyTcpLatency({
+      host: localProbeHost(config.listenHost),
+      port: Number(node.assignedPort),
+      timeoutMs: 8_000
+    });
+    if (listenerResult.error !== null) {
+      return { node, ok: false, latencyMs: listenerResult.latencyMs, detail: `listener:${listenerResult.error}` };
+    }
+    const target = resolveProxyTestTargets(["openai"])[0]!;
+    const upstreamResult = await testProxyTarget({
+      host: localProbeHost(config.listenHost),
+      port: Number(node.assignedPort),
+      target,
+      timeoutMs: 15_000
+    });
+    return {
+      node,
+      ok: upstreamResult.ok,
+      latencyMs: listenerResult.latencyMs,
+      detail: upstreamResult.ok ? `listener:${listenerResult.latencyMs}ms` : upstreamResult.message
+    };
+  });
+
+  const now = new Date().toISOString();
+  repo.saveNodes(
+    results.map(({ node, ok, latencyMs, detail }) => ({
+      ...node,
+      status: ok ? "active" as const : "failed" as const,
+      qualityScore: ok ? 100 : 0,
+      lastTestLatencyMs: latencyMs,
+      lastTestStatus: ok ? `tcp:ok:${detail}` : `tcp:failed:${detail}`,
+      lastTestTargets: JSON.stringify([{ targetId: "tcp", ok, latencyMs, message: detail }]),
+      lastHealthCheck: now,
+      updatedAt: now
+    }))
+  );
+
+  return {
+    checkedNodes: results.length,
+    passedNodes: results.filter((result) => result.ok).length,
+    failedNodes: results.filter((result) => !result.ok).length
+  };
+}
+
+async function pushHealthyNodes(repo: HiveRepository, config: RuntimeConfig): Promise<{
+  pushedNodes: number;
+  mappedNodes: number;
+}> {
+  const connection = repo.getSub2ApiConnection();
+  if (!connection) return { pushedNodes: 0, mappedNodes: 0 };
+
+  const nodes = repo.listNodes();
+  const payload = buildSub2ApiExport(nodes, {
+    host: config.exportHost,
+    namePrefix: connection.managedProxyPrefix,
+    selectedHashes: nodes
+      .filter(
+        (node) =>
+          node.status === "active" &&
+          Boolean(node.assignedPort) &&
+          (node.lifecycleStatus === "schedulable" || node.schedulable === true) &&
+          node.lifecycleStatus !== "retired" &&
+          node.lifecycleStatus !== "deleted" &&
+          node.lifecycleStatus !== "disabled"
+      )
+      .map((node) => node.hash)
+  });
+  const proxies = payload.proxies.filter((proxy) => proxy.status === "active");
+  if (proxies.length === 0) return { pushedNodes: 0, mappedNodes: 0 };
+
+  const client = createSub2ApiClient(connection);
+  await client.importProxyData({ proxies });
+  const liveProxies = await client.listAllProxies();
+  const mappings = mapLocalNodesToSub2ApiProxies({ nodes: repo.listNodes(), proxies: liveProxies, exportHost: config.exportHost });
+  repo.updateSub2ApiProxyMappings(mappings);
+  return { pushedNodes: proxies.length, mappedNodes: mappings.length };
 }

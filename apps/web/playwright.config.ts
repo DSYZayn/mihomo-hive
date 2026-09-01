@@ -38,7 +38,8 @@ export default defineConfig({
       HIVE_GENERATED_DIR: join(dataDir, "generated"),
       HIVE_CONFIG: join(dataDir, "hive.config.json"),
       HIVE_DATABASE_PATH: join(dataDir, "state.db"),
-      MIHOMO_BIN: "/usr/bin/true"
+      // E2E 覆盖 Web 交互，不需要在开发机上启动真实 Mihomo。
+      HIVE_DISABLE_MIHOMO_AUTOBOOT: "true"
     }
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }]

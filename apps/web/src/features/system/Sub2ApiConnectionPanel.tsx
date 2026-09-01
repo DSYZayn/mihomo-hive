@@ -1,15 +1,13 @@
-import React from "react";
 import { Activity, Save } from "lucide-react";
 import type { Sub2ApiSafeConnectionConfig } from "@mihomo-hive/schemas";
 import { Badge, Button, CollapsiblePanel, Panel, TextInput } from "../../components/ui.js";
 
 /**
- * Sub2API 连接表单（P5-AK 抽出复用）—— 系统页和（暂时）代理编排页都可放置。
+ * Sub2API 连接表单：设置与工具页唯一配置入口。
  *
  * 设计原则：
  *   - 这个组件**纯展示**：state 由调用方管理（连接 draft + connection 服务端配置）
- *   - 用同一份 storageKey 让面板在两处共享展开/折叠状态（用户在系统页收起后，
- *     回到代理编排页也是收起的；P5-AK/2d 完成后代理编排页就没这个 panel 了）
+ *   - 用稳定的 storageKey 记住展开/折叠状态
  *   - 提交动作（保存、测试）外部 mutation handle 处理
  */
 export interface Sub2ApiConnectionDraft {
@@ -29,21 +27,8 @@ export function Sub2ApiConnectionPanel(props: {
   onTest: () => void;
   /** 默认 collapsible；系统页主区可传 false 让它常驻展开 */
   collapsible?: boolean;
-  /** P6-12：新注册账号默认加入的 Sub2API 分组 group_ids（账号编排的注册行为，但概念属 Sub2API 侧）。 */
-  autoAssignGroupIds: number[];
-  savingGroups: boolean;
-  onSaveGroups: (ids: number[]) => void;
 }) {
   const connected = Boolean(props.connection?.configured);
-  const [groupText, setGroupText] = React.useState(props.autoAssignGroupIds.join(", "));
-  React.useEffect(() => {
-    setGroupText(props.autoAssignGroupIds.join(", "));
-  }, [props.autoAssignGroupIds.join(",")]);
-  const parsedGroups = groupText
-    .split(/[,，\s]+/)
-    .map((s) => Number(s.trim()))
-    .filter((n) => Number.isInteger(n) && n > 0);
-  const groupsDirty = parsedGroups.join(",") !== props.autoAssignGroupIds.join(",");
   const body = (
     <>
       <div className="sub2api-fields">
@@ -82,35 +67,8 @@ export function Sub2ApiConnectionPanel(props: {
         />
       </div>
       <p className="muted small">
-        托管前缀用于识别由 Hive 推送到 Sub2API 的代理。drain / 清理 / quality-check 操作只会作用于带这个前缀的代理。
+        托管前缀只用于识别 Hive 自己推送的代理。系统只做代理验活和幂等同步，不会读取或修改账号绑定。
       </p>
-      <div className="sub2api-fields" style={{ marginTop: 8 }}>
-        <div className="form-field">
-          <label className="form-label">新账号默认分组 group_ids</label>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              type="text"
-              className="matrix-search"
-              style={{ flex: 1 }}
-              value={groupText}
-              onChange={(e) => setGroupText(e.target.value)}
-              placeholder="例如 2 或 2, 5"
-            />
-            <Button
-              size="sm"
-              icon={<Save size={14} />}
-              loading={props.savingGroups}
-              disabled={!groupsDirty || parsedGroups.length === 0}
-              onClick={() => props.onSaveGroups(parsedGroups)}
-            >
-              保存
-            </Button>
-          </div>
-          <p className="muted small" style={{ marginTop: 4 }}>
-            Hive 自动注册/接管的新账号会加入这些 Sub2API 账号分组（group_id 在 Sub2API 侧定义）。逗号分隔多个。
-          </p>
-        </div>
-      </div>
       <div className="button-row wrap">
         <Button
           icon={<Save size={16} />}
@@ -141,18 +99,18 @@ export function Sub2ApiConnectionPanel(props: {
       <Panel
         title="Sub2API 连接"
         actions={badge}
-        hint="Sub2API baseUrl + 管理员 API Key + 托管代理前缀。系统级配置：代理编排、Sub2API 收编、节点导出等都依赖这里。"
+        hint="Sub2API baseUrl + 管理员 API Key + 托管代理前缀。节点幂等推送和导出依赖这里。"
       >
         {body}
       </Panel>
     );
   }
   return (
-    <CollapsiblePanel
+      <CollapsiblePanel
       title="Sub2API 连接"
       storageKey="system-sub2api-connection"
       defaultOpen={!connected}
-      hint="Sub2API baseUrl + 管理员 API Key + 托管代理前缀。系统级配置：代理编排、Sub2API 收编、节点导出等都依赖这里。"
+      hint="Sub2API baseUrl + 管理员 API Key + 托管代理前缀。节点幂等推送和导出依赖这里。"
       actions={badge}
     >
       {body}

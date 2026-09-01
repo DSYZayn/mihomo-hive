@@ -8,7 +8,6 @@ import {
   createSub2ApiClient,
   enumeratePorts,
   findOccupiedPorts,
-  groupAssignmentChangesByProxy,
   hashPassword,
   loadRuntimeConfig,
   mapWithConcurrency,
@@ -394,27 +393,8 @@ sub2api
   .option("--protect-proxy-ids <ids>", "Comma-separated protected Sub2API proxy IDs", "")
   .option("--protect-name <text>", "Protect proxies whose name contains text", "")
   .option("--overwrite-existing", "Reassign non-protected accounts even when they already have an assignable proxy")
-  .action(async (options) => {
-    const { repo } = await openRepo();
-    const assignment = buildSub2ApiAssignmentOptions(options);
-    const preview = await previewSub2ApiAssignments(repo, assignment);
-    if (preview.errors.length > 0) {
-      throw new Error(preview.errors.join("；"));
-    }
-    const client = createStoredSub2ApiClient(repo);
-    let success = 0;
-    let failed = 0;
-    const successIds: number[] = [];
-    const failedIds: number[] = [];
-    for (const batch of groupAssignmentChangesByProxy(preview.changes)) {
-      const result = await client.bulkUpdateProxy(batch.accountIds, batch.proxyId);
-      success += result.success;
-      failed += result.failed;
-      successIds.push(...result.successIds);
-      failedIds.push(...result.failedIds);
-      console.log(`Updated proxy ${batch.proxyId}: success=${result.success}, failed=${result.failed}`);
-    }
-    console.log(JSON.stringify({ changed: preview.changes.length, success, failed, successIds, failedIds }, null, 2));
+  .action(async () => {
+    throw new Error("账号代理自动迁移已禁用。Mihomo Hive 只验活节点并幂等推送代理，不会更换账号出口。");
   });
 
 // ─────────── 账号编排(fleet)CLI —— 供 AI/自动化直接驱动,无需网页登录态 ───────────

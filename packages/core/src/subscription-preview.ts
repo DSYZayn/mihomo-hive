@@ -82,6 +82,9 @@ function previewItem(
   matchedKeywords: string[],
   existingNode: ProxyNode | undefined
 ): SubscriptionImportPreview["items"][number] {
+  // 已经映射到 Sub2API 的节点不能因为订阅元数据变化而被删除，
+  // 否则远端账号仍指向旧出口时会形成断路或 IP 漂移。
+  const canDeleteExisting = Boolean(existingNode) && !existingNode?.sub2apiProxyId;
   return {
     hash: node.hash,
     name: node.name,
@@ -90,7 +93,7 @@ function previewItem(
     action,
     reason,
     matchedKeywords,
-    deletesExisting: action === "skip_filtered" && Boolean(existingNode),
+    deletesExisting: action === "skip_filtered" && canDeleteExisting,
     ...(existingNode?.assignedPort ? { existingAssignedPort: existingNode.assignedPort } : {})
   };
 }

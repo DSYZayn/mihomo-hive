@@ -42,4 +42,17 @@ proxies:
     expect(nodes).toHaveLength(1);
     expect(nodes[0]?.name).toBe("JP-Real");
   });
+
+  it("keeps a stable fingerprint when the provider only renames a node", () => {
+    const first = parseSubscription(
+      `proxies:\n  - name: JP-1\n    type: ss\n    server: example.com\n    port: 443\n`,
+      "source-1"
+    );
+    const renamed = parseSubscription(
+      `proxies:\n  - name: JP-1 Premium\n    type: ss\n    server: example.com\n    port: 443\n`,
+      "source-1"
+    );
+
+    expect(renamed[0]?.hash).toBe(first[0]?.hash);
+  });
 });

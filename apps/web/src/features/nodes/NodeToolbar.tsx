@@ -10,11 +10,9 @@ import {
   PlayCircle,
   Plug,
   RefreshCw,
-  Replace,
   RotateCcw,
+  Replace,
   Snowflake,
-  Star,
-  StarOff,
   Trash2,
   XSquare
 } from "lucide-react";
@@ -32,6 +30,7 @@ export interface NodeToolbarProps {
   busy: boolean;
   attaching: boolean;
   testing: boolean;
+  enabling: boolean;
   rebuilding: boolean;
   resetting: boolean;
   onAttach: () => void;
@@ -43,11 +42,6 @@ export interface NodeToolbarProps {
   /** 重置所选节点的编排意图（清 intent_role / backoff / health_score），让 reconcile 重新评估。
    *  用于恢复被误判 quarantined / evicted 的节点。 */
   onResetIntent: () => void;
-  /** P5-AS: 把所选节点标记为保留节点（专用于账号注册/登录的备用出口）。 */
-  onMarkReserved: () => void;
-  onUnmarkReserved: () => void;
-  reserving: boolean;
-  selectedReservedCount: number;
   onDisableSelected: () => void;
   onCoolingDownSelected: () => void;
   onRetireSelected: () => void;
@@ -181,10 +175,12 @@ export function NodeToolbar(props: NodeToolbarProps) {
 
         <Button
           size="sm"
+          variant="secondary"
           icon={<PlayCircle size={14} />}
           disabled={props.busy || !hasSelection}
+          loading={props.enabling}
           onClick={props.onEnableSelected}
-          title="把所选节点生命周期设为可调度 + 推送到 Sub2API + 回填代理 ID。完成后节点出现在代理编排页。建议先测过再启用。"
+          title="把所选节点设为可调度，并在验活通过后幂等推送到 Sub2API；不会更换已有账号出口。"
         >
           启用调度
         </Button>
@@ -209,37 +205,10 @@ export function NodeToolbar(props: NodeToolbarProps) {
             <DropdownItem
               icon={<RotateCcw size={14} />}
               disabled={props.busy || props.resetting || !hasSelection}
-              hint={
-                "重置所选节点的编排意图：清掉「退避中 / 已驱逐」状态、退避计数和健康分，让调和器重新评估。\n" +
-                "已退役的节点会自动恢复为可调度。\n\n" +
-                "用于健康信号误判导致节点被错误驱逐时的人工救援。"
-              }
+              hint="清除所选节点的退避计数和健康分，让后台重新验活；已有 Sub2API 映射会保留。"
               onClick={props.onResetIntent}
             >
-              重置编排状态
-            </DropdownItem>
-          </DropdownGroup>
-          <DropdownGroup label="保留节点（所选）">
-            <DropdownItem
-              icon={<Star size={14} />}
-              disabled={props.busy || props.reserving || !hasSelection}
-              hint={
-                "标记为保留节点：作为账号注册 / 登录的兜底出口，确保任何时候都有可用节点。\n\n" +
-                "注册不再强制走保留节点 —— 系统会在所有合格节点间分散、并探索新节点；保留节点只是「池子永不为空」的保证。\n" +
-                "登录恢复时优先复用账号上次成功的节点。\n\n" +
-                "不影响日常 serving 绑定。"
-              }
-              onClick={props.onMarkReserved}
-            >
-              标记为保留节点
-            </DropdownItem>
-            <DropdownItem
-              icon={<StarOff size={14} />}
-              disabled={props.busy || props.reserving || props.selectedReservedCount === 0}
-              hint="取消所选节点的保留标记。"
-              onClick={props.onUnmarkReserved}
-            >
-              取消保留{props.selectedReservedCount > 0 ? `（${props.selectedReservedCount}）` : ""}
+              重置健康状态
             </DropdownItem>
           </DropdownGroup>
           <DropdownGroup label="生命周期（所选）">
@@ -248,7 +217,7 @@ export function NodeToolbar(props: NodeToolbarProps) {
               disabled={props.busy || !hasSelection}
               hint={
                 "生命周期 → 已锁定：节点被冻结。\n" +
-                "已绑账号留在原地不会被迁走、新账号也不会绑过来、不会自动恢复。\n\n" +
+                "已有账号绑定保持不变，不会被系统迁移。\n\n" +
                 "需要主动点「启用调度」才能重新接活。保留本地记录与端口。"
               }
               onClick={props.onDisableSelected}
@@ -260,8 +229,8 @@ export function NodeToolbar(props: NodeToolbarProps) {
               disabled={props.busy || !hasSelection}
               hint={
                 "生命周期 → 冷却中：节点有问题，暂时下线。\n" +
-                "调和器视为已驱逐，把账号迁到健康节点。\n\n" +
-                "与退役的区别只在意图：冷却预期会恢复（你主动重新启用调度），退役表示永久下线。"
+                "节点会暂时停止推送，后台验活恢复后可再次启用。\n\n" +
+                "与退役的区别只在生命周期：冷却预期会恢复，退役表示永久下线。"
               }
               onClick={props.onCoolingDownSelected}
             >
@@ -272,7 +241,7 @@ export function NodeToolbar(props: NodeToolbarProps) {
               disabled={props.busy || !hasSelection}
               hint={
                 "生命周期 → 已退役：永久下线。\n" +
-                "账号被强制迁出到健康节点，端口收回；本地记录保留用于历史查询。"
+                "节点停止推送，端口可被回收；本地记录保留用于历史查询。"
               }
               onClick={props.onRetireSelected}
             >
@@ -282,7 +251,7 @@ export function NodeToolbar(props: NodeToolbarProps) {
               icon={<Trash2 size={14} />}
               danger
               disabled={props.busy || !hasSelection}
-              hint="完全删除：Sub2API 解绑账号、删远端代理、删本地记录。需要二次确认。"
+              hint="完全删除本地节点记录；不会执行账号迁移。需要二次确认。"
               onClick={props.onPreviewDeleteSelected}
             >
               删除

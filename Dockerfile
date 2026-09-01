@@ -25,17 +25,6 @@ ARG MIHOMO_VERSION=1.19.24
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl gzip \
   && rm -rf /var/lib/apt/lists/*
-# Chromium (headless-shell) 运行时系统库 —— 让"宿主机装 codex-tool + 挂载"路径
-# (docs/runbook.md 路径 D) 里 codex-tool 自带的 playwright chromium 能在容器内
-# launch。不含 chromium 本身（由挂载提供），只装它依赖的共享库；约 +80MB。
-# 不用 codex-tool 的部署这些库闲置无害。覆盖 chromium-headless-shell ldd 的全部依赖。
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-       libglib2.0-0 libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
-       libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxext6 \
-       libxfixes3 libxrandr2 libgbm1 libxcb1 libx11-6 libxshmfence1 libexpat1 \
-       libasound2 libatspi2.0-0 libpango-1.0-0 libcairo2 fonts-liberation \
-  && rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
   case "${TARGETOS:-linux}-${TARGETARCH:-amd64}" in \
     linux-amd64) mihomo_asset="mihomo-linux-amd64-compatible-v${MIHOMO_VERSION}.gz" ;; \

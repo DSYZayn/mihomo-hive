@@ -21,16 +21,8 @@ import { exportSub2Api } from "@mihomo-hive/exporters";
 import { readMihomoStatus, reloadMihomo, startMihomo } from "@mihomo-hive/mihomo";
 import { sub2ApiExportRequestSchema } from "@mihomo-hive/schemas";
 import { existsSync } from "node:fs";
-import {
-  startAccountFleetScheduler,
-  type AccountFleetSchedulerHandle
-} from "./account-fleet-orchestrator.js";
-import {
-  startAccountJobsWorker,
-  type AccountJobsWorkerHandle
-} from "./account-fleet-worker.js";
 import { codexEgressRenderOpts } from "./codex-egress.js";
-import { startReconcileScheduler, type ReconcileSchedulerHandle } from "./orchestrator.js";
+import { startNodeMaintenanceScheduler } from "./orchestrator.js";
 import { appRouter } from "./router.js";
 
 const config = await loadRuntimeConfig();
@@ -125,23 +117,10 @@ app.post("/api/mihomo/render", async (c) => {
   return c.json({ listeners: rendered.egressMap.length });
 });
 
-// ADR 0003：启动声明式编排调度器。HIVE_DISABLE_RECONCILE=true 可关掉（e2e 用）。
-const reconcileScheduler: ReconcileSchedulerHandle | undefined =
-  process.env.HIVE_DISABLE_RECONCILE === "true" ? undefined : startReconcileScheduler({ repo, config });
-
-// notes/account-fleet-design.md：账号生命周期调度器 + jobs worker。
-//   - HIVE_DISABLE_ACCOUNT_FLEET=true 完全关闭（一般不需要）
-//   - 不再有 dry_run / apply 模式开关：默认 Spec.enabled=false 表示"只观察"，
-//     用户在 UI 手动打开后才真正触发 codex-tool / Sub2API 调用
-//   - HIVE_ACCOUNT_KEY env 是 codex_login / codex_register 解密 phone+password 用的密钥
-const accountFleetScheduler: AccountFleetSchedulerHandle | undefined =
-  process.env.HIVE_DISABLE_ACCOUNT_FLEET === "true" || process.env.HIVE_DISABLE_RECONCILE === "true"
-    ? undefined
-    : startAccountFleetScheduler({ repo });
-const accountJobsWorker: AccountJobsWorkerHandle | undefined =
-  process.env.HIVE_DISABLE_ACCOUNT_FLEET === "true" || process.env.HIVE_DISABLE_RECONCILE === "true"
-    ? undefined
-    : startAccountJobsWorker({ repo, config });
+// 精简后台维护器：只做订阅刷新、节点验活和 Sub2API 代理幂等同步。
+// 绝不读取或修改账号代理绑定，因此不会造成账号 IP 漂移。
+const nodeMaintenanceScheduler =
+  process.env.HIVE_DISABLE_MAINTENANCE === "true" ? undefined : startNodeMaintenanceScheduler({ repo, config });
 
 app.use("/trpc/*", async (c) =>
   fetchRequestHandler({
@@ -152,9 +131,9 @@ app.use("/trpc/*", async (c) =>
       config,
       repo,
       authenticated: await isAuthenticated(c.req.raw),
-      orchestrator: reconcileScheduler,
-      accountFleetScheduler,
-      accountJobsWorker
+      orchestrator: undefined,
+      accountFleetScheduler: undefined,
+      accountJobsWorker: undefined
     })
   })
 );

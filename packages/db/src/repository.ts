@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import {
   accountBudgetRecordSchema,
   accountFleetSpecSchema,
@@ -379,6 +380,44 @@ export class HiveRepository {
     transaction(nodes);
   }
 
+  /**
+   * 合并旧版本按完整 raw 配置生成的重复节点。
+   * 订阅供应商改名或调整展示元数据时，旧版本会留下多条同一出口记录；
+   * 保留运维信息最完整的一条，并把 hash 规范化到连接参数指纹。
+   */
+  deduplicateNodesByIdentity(): number {
+    const nodes = this.listNodes();
+    const groups = new Map<string, ProxyNode[]>();
+    for (const node of nodes) {
+      const key = identityHash(node.raw);
+      const group = groups.get(key) ?? [];
+      group.push(node);
+      groups.set(key, group);
+    }
+
+    let removed = 0;
+    const transaction = this.sqlite.transaction(() => {
+      for (const [identity, group] of groups) {
+        group.sort((a, b) => nodeKeepScore(b) - nodeKeepScore(a));
+        const winner = group[0];
+        if (!winner) continue;
+        const losers = group.slice(1);
+        for (const loser of losers) {
+          this.sqlite.prepare("DELETE FROM nodes WHERE hash = ?").run(loser.hash);
+          removed += 1;
+        }
+        if (winner.hash !== identity) {
+          const collision = this.sqlite.prepare("SELECT hash FROM nodes WHERE hash = ?").get(identity) as { hash: string } | undefined;
+          if (!collision || collision.hash === winner.hash) {
+            this.sqlite.prepare("UPDATE nodes SET hash = ? WHERE hash = ?").run(identity, winner.hash);
+          }
+        }
+      }
+    });
+    transaction();
+    return removed;
+  }
+
   listNodes(): ProxyNode[] {
     const rows = this.sqlite.prepare("SELECT * FROM nodes ORDER BY assigned_port, name").all() as NodeRow[];
     return rows.map(nodeFromRow);
@@ -490,11 +529,9 @@ export class HiveRepository {
    * 重置节点的编排意图状态：清掉 intent_role / backoff / health_score / last_health_check，
    * 让下次 reconcile 重新评估。
    *
-   * 同时清掉 `sub2api_proxy_id`：被驱逐过的节点端口已被 assignStablePorts 收回，
-   * 但 sub2api_proxy_id 留着会指向 Sub2API 端的"孤儿代理"（host:port 还指向一个
-   * 已经不存在的本地 listener）。清掉映射让节点跟孤儿脱钩；用户后续走"分配端口
-   * + 启用调度"会触发 importProxyData 建新代理 + 重建映射。Sub2API 端的孤儿
-   * 代理由 sub2api.maintenance.cleanupEmpty 清。
+   * 保留 `sub2api_proxy_id`：Sub2API 账号可能仍绑定这个出口，重置本地健康意图
+   * 不能顺手制造新的远端代理或改变账号出口。后续幂等同步会复用现有 proxy_key，
+   * 节点若已失联则只在节点状态中体现。
    *
    * 主要用途：把因为健康信号误归因被 quarantined / evicted 的节点恢复回评估池。
    * **不**改 lifecycle_status —— 调用方需要单独把 retired 节点改回 schedulable。
@@ -510,7 +547,6 @@ export class HiveRepository {
         backoff_attempts = 0,
         health_score = NULL,
         last_health_check = NULL,
-        sub2api_proxy_id = NULL,
         updated_at = @updatedAt
       WHERE hash = @hash
     `);
@@ -1881,4 +1917,35 @@ function statusFromLifecycle(lifecycleStatus: NodeLifecycleStatus): ProxyNode["s
     default:
       return "inactive";
   }
+}
+
+function nodeKeepScore(node: ProxyNode): number {
+  return (
+    (node.sub2apiProxyId ? 1_000_000 : 0) +
+    (node.assignedPort ? 100_000 : 0) +
+    (node.status === "active" ? 10_000 : 0) +
+    Date.parse(node.updatedAt || node.createdAt || "")
+  );
+}
+
+function identityHash(value: unknown): string {
+  return createHash("sha256").update(stableIdentityString(value)).digest("hex");
+}
+
+function stableIdentityString(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableIdentityString).join(",")}]`;
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  const record = value as Record<string, unknown>;
+  if (typeof record.uri === "string") {
+    const fragment = record.uri.indexOf("#");
+    return stableIdentityString({
+      type: record.type ?? "unknown",
+      uri: fragment === -1 ? record.uri : record.uri.slice(0, fragment)
+    });
+  }
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !["name", "ps", "remarks", "remark", "display_name"].includes(key.toLowerCase()))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableIdentityString(item)}`)
+    .join(",")}}`;
 }
