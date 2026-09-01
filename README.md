@@ -63,7 +63,7 @@
 推荐直接使用预构建镜像：
 
 ```text
-ghcr.io/nekroai/mihomo-hive:latest
+ghcr.io/dsyzayn/mihomo-hive:latest
 ```
 
 `docker-compose.yml`：
@@ -71,7 +71,7 @@ ghcr.io/nekroai/mihomo-hive:latest
 ```yaml
 services:
   mihomo-hive:
-    image: ghcr.io/nekroai/mihomo-hive:latest
+    image: ghcr.io/dsyzayn/mihomo-hive:latest
     container_name: mihomo-hive
     restart: unless-stopped
     network_mode: host

@@ -11,7 +11,7 @@
 # 镜像体积大约 1.5–2 GB（含 Chromium）。如果你的部署节点本地有 codex-tool 工作
 # 环境，宁可在宿主机直跑 mihomo-hive（不容器化）也比这种"重容器"轻量。
 
-FROM ghcr.io/nekroai/mihomo-hive:latest
+FROM ghcr.io/dsyzayn/mihomo-hive:latest
 
 # ① 装 Python 3.11 + 系统依赖（Chromium 跑 headless 需要）
 RUN apt-get update && apt-get install -y --no-install-recommends \

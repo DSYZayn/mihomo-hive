@@ -11,7 +11,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/nekroai/mihomo-hive
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   docker:
@@ -38,7 +39,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=main-
@@ -56,4 +57,4 @@ jobs:
           cache-to: type=gha,mode=max,scope=docker
 
       - name: Inspect published image
-        run: docker buildx imagetools inspect "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+        run: docker buildx imagetools inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"

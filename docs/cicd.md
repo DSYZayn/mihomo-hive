@@ -12,7 +12,7 @@
 默认镜像：
 
 ```text
-ghcr.io/nekroai/mihomo-hive:latest
+ghcr.io/dsyzayn/mihomo-hive:latest
 ```
 
 镜像内置 Mihomo binary，Dockerfile 会根据 BuildKit 的 `TARGETOS/TARGETARCH` 下载对应 Linux binary。`linux/amd64` 使用 Mihomo 的 `amd64-compatible` 包，避免老 CPU 不支持 x86-64-v3 导致无法启动。

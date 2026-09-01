@@ -67,7 +67,7 @@ Mihomo Hive 是一个 AI-first TypeScript monorepo，**提供三条递进能力*
 
 ## 部署假设
 
-生产部署使用预构建镜像（`ghcr.io/nekroai/mihomo-hive:latest`）+ Docker `network_mode: host`。Mihomo 默认监听 `127.0.0.1:10001-10300`。Sub2API 与本项目通常运行在同一台主机；HIVE_HOST 默认 `0.0.0.0`，HIVE_PORT 默认 `9990`。
+生产部署使用预构建镜像（`ghcr.io/dsyzayn/mihomo-hive:latest`）+ Docker `network_mode: host`。Mihomo 默认监听 `127.0.0.1:10001-10300`。Sub2API 与本项目通常运行在同一台主机；HIVE_HOST 默认 `0.0.0.0`，HIVE_PORT 默认 `9990`。
 
 ## 文档与提交规范
 
