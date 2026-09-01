@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { closeSync, existsSync, openSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { RuntimeConfig } from "@mihomo-hive/schemas";
 
@@ -85,6 +85,9 @@ export async function startMihomo(config: RuntimeConfig): Promise<MihomoStatus> 
     return status;
   }
 
+  // 残留 pidfile 指向死进程时直接删掉，避免一遍遍读到同一个死 pid。
+  await rm(config.mihomoPidPath, { force: true });
+
   await mkdir(dirname(config.mihomoPidPath), { recursive: true });
   await mkdir(dirname(config.mihomoLogPath), { recursive: true });
 
@@ -105,17 +108,72 @@ export async function startMihomo(config: RuntimeConfig): Promise<MihomoStatus> 
   }
 
   await writeFile(config.mihomoPidPath, `${child.pid}\n`);
-  return { running: true, pid: child.pid };
+
+  // spawn 成功 ≠ mihomo 真的活着：配置错误 / 端口被占 / 二进制异常都会让它
+  // 启动即退。等一小段启动窗口后复检，死了就把 log 尾部抛出来，否则用户
+  // 只能看到"未运行"却永远不知道原因、也无法手动恢复。
+  await waitForProcessBoot(child.pid, 1200);
+  if (processAlive(child.pid)) {
+    return { running: true, pid: child.pid };
+  }
+
+  await rm(config.mihomoPidPath, { force: true });
+  const tail = readLogTail(config.mihomoLogPath, 4000);
+  throw new Error(
+    `Mihomo 启动后立即退出 (pid ${child.pid})。` +
+      (tail ? `\n日志尾部：\n${tail}` : "\n日志为空，请检查 mihomo 二进制与配置路径。")
+  );
 }
 
 export async function stopMihomo(config: RuntimeConfig): Promise<MihomoStatus> {
   const status = await readMihomoStatus(config);
-  if (!status.running || !status.pid) {
+  if (!status.running) {
+    // pidfile 可能已丢但进程还活着（占着端口），尽力按端口/二进制清理由系统层兜底；
+    // 这里至少把残留 pidfile 清掉，保证下一次 start 不被死 pid 卡住。
+    await rm(config.mihomoPidPath, { force: true });
     return { running: false };
   }
-  process.kill(status.pid, "SIGTERM");
+  if (status.pid) {
+    try {
+      process.kill(status.pid, "SIGTERM");
+    } catch {
+      // 已退出
+    }
+  }
   await rm(config.mihomoPidPath, { force: true });
   return { running: false };
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return processIsMihomo(pid);
+  } catch {
+    return false;
+  }
+}
+
+function waitForProcessBoot(_pid: number, ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 读 mihomo 日志尾部用于启动失败报错；文件不存在/读失败时返回空串。 */
+function readLogTail(logPath: string, maxBytes: number): string {
+  try {
+    if (!existsSync(logPath)) return "";
+    const size = statSync(logPath).size;
+    const start = Math.max(0, size - maxBytes);
+    const fd = openSync(logPath, "r");
+    try {
+      const buffer = Buffer.alloc(size - start);
+      readSync(fd, buffer, 0, buffer.length, start);
+      return buffer.toString("utf8").trim();
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
 }
 
 export async function reloadMihomo(config: RuntimeConfig): Promise<MihomoStatus> {
