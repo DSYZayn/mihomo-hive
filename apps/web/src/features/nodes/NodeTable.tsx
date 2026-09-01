@@ -324,9 +324,8 @@ function CodexOutcomeCell(props: { node: ProxyNode }) {
 }
 
 /**
- * 代理延迟（L1）：服务直连代理 host:port 的 TCP 握手延迟。
- * 不经 mihomo、不经业务目标 — 反映"我方→代理"的网络距离。
- * 加入前置代理（dialer-proxy）后将变为"服务→front→代理"链路握手延迟。
+ * 普通节点显示服务直连代理 host:port 的 TCP 握手延迟。
+ * 链式节点显示经 Mihomo listener 走完整链路到业务目标的端到端延迟。
  *
  * 阈值（经验）：<200ms 绿、<800ms 中性、<2000ms 黄、≥2000ms 红、null 灰。
  */

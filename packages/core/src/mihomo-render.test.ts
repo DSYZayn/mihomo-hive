@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { defaultRuntimeConfig, type ProxyNode } from "@mihomo-hive/schemas";
-import { renderMihomoConfig } from "./mihomo-render.js";
+import { proxyNameForNode, renderMihomoConfig } from "./mihomo-render.js";
 
 describe("renderMihomoConfig", () => {
   it("renders 300 fixed mixed listeners", () => {
@@ -98,7 +99,7 @@ describe("renderMihomoConfig", () => {
       name: "target",
       originalName: "target",
       assignedPort: 10003,
-      raw: { type: "ss", server: "target.example.com", port: 443 }
+      raw: { type: "ss", server: "current-target.example.com", port: 8443, password: "current-secret" }
     };
     const chain: ProxyNode = {
       ...front,
@@ -109,16 +110,24 @@ describe("renderMihomoConfig", () => {
       chain: { frontNodeHash: front.hash, targetNodeHash: "target00abcdef", frontNodeName: "front", targetNodeName: "target" },
       raw: {
         type: "ss",
-        server: "target.example.com",
+        server: "stale-target.example.com",
         port: 443,
+        password: "stale-secret",
         "dialer-proxy": "stale-name",
         __hiveChain: { frontNodeHash: front.hash, targetNodeHash: "target00abcdef" }
       },
       assignedPort: 10002
     };
     const rendered = renderMihomoConfig([front, target, chain], defaultRuntimeConfig);
-    expect(rendered.yaml).toContain("dialer-proxy: hive-10001-front000");
-    expect(rendered.yaml).not.toContain("__hiveChain");
+    const document = parse(rendered.yaml) as { proxies: Array<Record<string, unknown>> };
+    const chainProxy = document.proxies.find((proxy) => proxy.name === proxyNameForNode(chain));
+    expect(chainProxy).toMatchObject({
+      server: "current-target.example.com",
+      port: 8443,
+      password: "current-secret",
+      "dialer-proxy": proxyNameForNode(front)
+    });
+    expect(chainProxy).not.toHaveProperty("__hiveChain");
   });
 });
 

@@ -8,8 +8,8 @@ const execFileAsync = promisify(execFile);
  * 直接 TCP connect 到代理 host:port，测握手延迟（L1）。
  * 不走 mihomo、不走业务目标 — 反映"服务到代理"的网络距离。
  *
- * 未来加前置代理后：这里改成走 socks5/http connect 经 front 建链到目标 host:port，
- * 测出的 latency 会包含 front 的中转开销，体现"加入前置代理后实际链路"。
+ * 仅用于普通节点。链式节点不能调用这个直连探测绕过中间跳，必须通过
+ * 本地 Mihomo listener 发出业务目标请求来验证完整链路。
  *
  * 返回 { latencyMs, error? }：error 非 null 时 latencyMs 是失败前的耗时。
  */

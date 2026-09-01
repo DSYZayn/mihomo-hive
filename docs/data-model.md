@@ -21,11 +21,11 @@
 | 字段 | 含义 |
 |---|---|
 | `lastTestStatus` | 旧格式 `openai:401,claude:405`，向后兼容 |
-| `lastTestLatencyMs` | **新语义：L1 延迟**。服务直连代理 `host:port` 的 TCP 握手时间，不经 Mihomo、不打业务目标 |
+| `lastTestLatencyMs` | 普通节点为直连代理 `host:port` 的 TCP 握手时间；链式节点为经 Mihomo listener 走完整链路到业务目标的端到端延迟 |
 | `lastTestTargets` | 新字段，JSON 数组：`[{ targetId, ok, latencyMs, httpStatus?, message? }]`。每个测试目标的 L2 端到端结果 |
 
 UI 端 NodeTable 显示：
-- "代理延迟" 列 = `lastTestLatencyMs`（L1）
+- "代理延迟" 列 = `lastTestLatencyMs`（普通节点为 L1，链式节点为完整链路端到端延迟）
 - "目标延迟" 列 = `lastTestTargets` 解析（L2），每个 target 一个 chip + 秒数 + 颜色编码
 
 ---

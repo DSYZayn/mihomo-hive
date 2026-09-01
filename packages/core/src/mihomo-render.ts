@@ -62,7 +62,10 @@ export function renderMihomoConfig(
     .sort((a, b) => Number(a.assignedPort) - Number(b.assignedPort));
 
   const proxies = activeNodes.map((node) => {
-    const raw = renderableProxyRaw(node.raw);
+    const target = node.chain ? nodes.find((candidate) => candidate.hash === node.chain?.targetNodeHash) : undefined;
+    // 链式记录只保存节点关系；每次都从最后出口的当前定义渲染，避免订阅刷新后
+    // 仍使用旧凭据或旧传输参数。
+    const raw = renderableProxyRaw(node.kind === "chain" && target ? target.raw : node.raw);
     const front = node.chain ? nodes.find((candidate) => candidate.hash === node.chain?.frontNodeHash) : undefined;
     if (node.kind === "chain" && front?.assignedPort) {
       raw["dialer-proxy"] = proxyNameForNode(front);

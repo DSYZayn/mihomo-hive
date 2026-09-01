@@ -410,7 +410,7 @@ async function runActiveProbeRound(
   const nodes = repo.listNodes().filter((n) => {
     if (!n.sub2apiProxyId) return false;
     if (!n.assignedPort) return false;
-    if (typeof n.raw?.server !== "string" || typeof n.raw?.port !== "number") return false;
+    if (n.kind !== "chain" && (typeof n.raw?.server !== "string" || typeof n.raw?.port !== "number")) return false;
     const lc = n.lifecycleStatus ?? "candidate";
     // 所有仍关联 Sub2API 的非终态节点都要测，包括历史不一致的 candidate。
     return lc !== "retired" && lc !== "deleted";
@@ -440,6 +440,23 @@ async function runActiveProbeRound(
         ok: false,
         detail: `local_listener: ${listenerResult.error}`,
         localListenerDown: true
+      });
+      return;
+    }
+
+    if (node.kind === "chain") {
+      const target = resolveProxyTestTargets(["openai"])[0]!;
+      const chainResult = await testProxyTarget({
+        host: listenerHost,
+        port: Number(node.assignedPort),
+        target,
+        timeoutMs: policy.timeoutMs
+      });
+      probeStateByProxy.set(node.sub2apiProxyId!, {
+        at: Date.now(),
+        ok: chainResult.ok,
+        detail: chainResult.ok ? `chain:${chainResult.latencyMs}ms` : `chain:${chainResult.message}`,
+        localListenerDown: false
       });
       return;
     }

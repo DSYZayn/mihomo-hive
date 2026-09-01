@@ -681,10 +681,10 @@ export const appRouter = t.router({
         //   • 未给 hashFilter（"测试全部"或定时任务）：保留原自动 lifecycle 调整行为。
         const manualMode = Boolean(hashFilter);
         const tested = await mapWithConcurrency(candidates, input.concurrency, async (node) => {
-          // L1：服务直连代理 host:port 的 TCP 握手延迟（不经 mihomo、不经目标）。
-          // 反映"我方→代理"的网络距离。从 node.raw 拿真实出口地址。
-          const rawHost = typeof node.raw?.server === "string" ? node.raw.server : null;
-          const rawPort = typeof node.raw?.port === "number" ? node.raw.port : null;
+          // 普通节点保留直连入口的 L1 信号。链式节点不能绕过中间跳直测
+          // 最终节点；它的延迟与成败必须来自下面经 listener 发出的整链 L2 请求。
+          const rawHost = node.kind !== "chain" && typeof node.raw?.server === "string" ? node.raw.server : null;
+          const rawPort = node.kind !== "chain" && typeof node.raw?.port === "number" ? node.raw.port : null;
           const l1 =
             rawHost && rawPort
               ? await measureProxyTcpLatency({ host: rawHost, port: rawPort, timeoutMs: input.timeoutMs })
@@ -706,8 +706,9 @@ export const appRouter = t.router({
             qualityScore: passed ? (latencyExceeds ? 60 : 100) : 25,
             // 旧字段：保留 status 拼接给老 UI 兜底
             lastTestStatus: results.map((result) => `${result.targetId}:${result.httpStatus ?? result.message}`).join(","),
-            // 新语义：lastTestLatencyMs = L1（服务→代理）
-            lastTestLatencyMs: l1.latencyMs,
+            // 链式节点记录整条链到业务目标的端到端延迟，避免把最终节点
+            // 的直连握手伪装成链路健康；普通节点仍记录 L1。
+            lastTestLatencyMs: node.kind === "chain" ? targetMaxLatency : l1.latencyMs,
             // 新字段：每个目标的完整结果（含 L2 端到端 latency），JSON 字符串
             lastTestTargets: JSON.stringify(
               results.map((r) => ({

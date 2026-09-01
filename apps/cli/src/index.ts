@@ -178,9 +178,10 @@ nodes
     const host = options.host ?? config.listenHost;
     const candidates = repo.listNodes().filter((node) => node.assignedPort);
     const tested = await mapWithConcurrency(candidates, options.concurrency, async (node) => {
-      // 与 router nodes.test 保持一致：先测 L1（服务→代理直连握手），再测 L2（每个业务目标端到端）
-      const rawHost = typeof node.raw?.server === "string" ? node.raw.server : null;
-      const rawPort = typeof node.raw?.port === "number" ? node.raw.port : null;
+      // 普通节点测直连 L1；链式节点的所有健康信号都来自下面经 listener
+      // 发出的整链请求，不能绕过第一跳直测最终节点。
+      const rawHost = node.kind !== "chain" && typeof node.raw?.server === "string" ? node.raw.server : null;
+      const rawPort = node.kind !== "chain" && typeof node.raw?.port === "number" ? node.raw.port : null;
       const l1 =
         rawHost && rawPort
           ? await measureProxyTcpLatency({ host: rawHost, port: rawPort, timeoutMs: options.timeoutMs })
@@ -201,12 +202,14 @@ nodes
       const statusText = results
         .map((result) => `${result.targetId}:${result.httpStatus ?? result.message}`)
         .join(",");
-      console.log(`${node.assignedPort}\t${passed ? "pass" : "fail"}\tL1=${l1.latencyMs}ms\t${statusText}\t${node.name}`);
+      const targetMaxLatency = Math.max(...results.map((result) => result.latencyMs));
+      const reportedLatency = node.kind === "chain" ? targetMaxLatency : l1.latencyMs;
+      console.log(`${node.assignedPort}\t${passed ? "pass" : "fail"}\tlatency=${reportedLatency}ms\t${statusText}\t${node.name}`);
       return {
         ...node,
         status: passed ? ("active" as const) : ("failed" as const),
         lastTestStatus: statusText,
-        lastTestLatencyMs: l1.latencyMs,
+        lastTestLatencyMs: reportedLatency,
         lastTestTargets: JSON.stringify(
           results.map((r) => ({
             targetId: r.targetId,

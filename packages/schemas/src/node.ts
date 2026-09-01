@@ -111,8 +111,8 @@ export const proxyNodeSchema = z.object({
   /**
    * 语义已变更（P5-R 起）：从"OpenAI/Claude 测试中最大端到端延迟"改为
    * "服务直连代理 host:port 的 TCP 握手延迟（L1）"。
-   * 不经过 mihomo、不经过任何业务目标；只反映"我方→代理"的网络距离。
-   * 加入前置代理（dialer-proxy）后，这一值会变成"服务→前置代理→目标代理"链路的握手延迟。
+   * 普通节点不经过 mihomo、不经过业务目标，只反映"我方→代理"的网络距离。
+   * 链式节点必须验证完整链路，因此记录经本地 listener 到业务目标的端到端延迟。
    */
   lastTestLatencyMs: z.number().int().nonnegative().optional(),
   /** 每个测试目标（openai / claude / ...）的独立结果，JSON 字符串。优先于 lastTestStatus 显示。 */
