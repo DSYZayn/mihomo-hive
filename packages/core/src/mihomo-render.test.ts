@@ -71,6 +71,55 @@ describe("renderMihomoConfig", () => {
     expect(rendered.egressMap.map((item) => item.port)).toEqual([10002]);
     expect(rendered.yaml).toContain("port: 10002");
   });
+
+  it("renders a chain node with the current front proxy and hides Hive metadata", () => {
+    const front: ProxyNode = {
+      hash: "front000abcdef",
+      sourceId: "sample",
+      name: "front",
+      originalName: "front",
+      type: "ss",
+      region: "unknown",
+      raw: { type: "ss", server: "front.example.com", port: 443 },
+      status: "active",
+      lifecycleStatus: "schedulable",
+      schedulable: true,
+      protected: false,
+      assignedPort: 10001,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    const target: ProxyNode = {
+      ...front,
+      hash: "target00abcdef",
+      name: "target",
+      originalName: "target",
+      assignedPort: 10003,
+      raw: { type: "ss", server: "target.example.com", port: 443 }
+    };
+    const chain: ProxyNode = {
+      ...front,
+      hash: "chain000abcdef",
+      name: "front → target",
+      originalName: "front → target",
+      kind: "chain",
+      chain: { frontNodeHash: front.hash, targetNodeHash: "target00abcdef", frontNodeName: "front", targetNodeName: "target" },
+      raw: {
+        type: "ss",
+        server: "target.example.com",
+        port: 443,
+        "dialer-proxy": "stale-name",
+        __hiveChain: { frontNodeHash: front.hash, targetNodeHash: "target00abcdef" }
+      },
+      assignedPort: 10002
+    };
+    const rendered = renderMihomoConfig([front, target, chain], defaultRuntimeConfig);
+    expect(rendered.yaml).toContain("dialer-proxy: hive-10001-front000");
+    expect(rendered.yaml).not.toContain("__hiveChain");
+  });
 });
 
 describe("renderMihomoConfig codex-egress (外置 agent)", () => {

@@ -20,6 +20,8 @@ export const nodes = sqliteTable("nodes", {
   type: text("type").notNull(),
   region: text("region").notNull(),
   rawJson: text("raw_json").notNull(),
+  kind: text("kind", { enum: ["direct", "chain"] }).notNull().default("direct"),
+  chainJson: text("chain_json"),
   status: text("status", { enum: ["active", "inactive", "untested", "failed"] }).notNull(),
   lifecycleStatus: text("lifecycle_status", {
     enum: ["candidate", "testing", "schedulable", "disabled", "draining", "cooling_down", "retired", "deleted"]

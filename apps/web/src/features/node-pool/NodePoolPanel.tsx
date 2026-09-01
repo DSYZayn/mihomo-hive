@@ -1,7 +1,7 @@
 import React from "react";
-import { AlertTriangle, CheckCircle2, DownloadCloud, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, GitBranch, Plus, RefreshCw, Save, Search, Trash2, X } from "lucide-react";
 import type { NodeDeletionPlan, ProxyNode, SubscriptionImportPreview, SubscriptionSource } from "@mihomo-hive/schemas";
-import { Badge, Button, EmptyState, Panel, TextInput } from "../../components/ui.js";
+import { Badge, Button, EmptyState, Panel, SelectInput, TextInput } from "../../components/ui.js";
 import { formatRegion } from "../nodes/node-utils.js";
 
 export function NodePoolPanel(props: {
@@ -26,7 +26,27 @@ export function NodePoolPanel(props: {
   onClearPreview: () => void;
   onApplyDeleteSelected: (forceLocal: boolean) => void;
   onDeleteSubscription: (id: string) => void;
+  creatingChain: boolean;
+  onCreateChain: (input: { frontHash: string; targetHash: string; name?: string }) => void;
 }) {
+  const directNodes = props.nodes.filter(
+    (node) => node.kind !== "chain" && node.lifecycleStatus !== "retired" && node.lifecycleStatus !== "deleted"
+  );
+  const frontCandidates = directNodes.filter((node) => Boolean(node.assignedPort));
+  const targetCandidates = directNodes;
+  const [frontHash, setFrontHash] = React.useState("");
+  const [targetHash, setTargetHash] = React.useState("");
+  const [chainName, setChainName] = React.useState("");
+
+  React.useEffect(() => {
+    if (!frontCandidates.some((node) => node.hash === frontHash)) setFrontHash(frontCandidates[0]?.hash ?? "");
+    if (!targetCandidates.some((node) => node.hash === targetHash) || targetHash === frontHash) {
+      setTargetHash(targetCandidates.find((node) => node.hash !== (frontHash || frontCandidates[0]?.hash))?.hash ?? "");
+    }
+  }, [frontCandidates, frontHash, targetCandidates, targetHash]);
+
+  const selectedFront = frontCandidates.find((node) => node.hash === frontHash);
+  const targetOptions = targetCandidates.filter((node) => node.hash !== frontHash);
   const schedulable = props.nodes.filter((node) => node.lifecycleStatus === "schedulable").length;
   const cooling = props.nodes.filter((node) => node.lifecycleStatus === "cooling_down").length;
   const candidate = props.nodes.filter((node) => node.lifecycleStatus === "candidate").length;
@@ -106,6 +126,41 @@ export function NodePoolPanel(props: {
                 </Button>
               </div>
             ))
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="链式代理" actions={<Badge tone={frontCandidates.length >= 1 && targetOptions.length >= 1 ? "info" : "neutral"}>两跳</Badge>}>
+        <div className="stack">
+          <p className="muted small">用一个已分配端口的节点作为前置，再经另一个节点出站。创建后会生成普通节点池记录，可单独测试和启用调度。</p>
+          {frontCandidates.length < 1 || targetOptions.length < 1 ? (
+            <EmptyState title="暂无可用节点" description="请先为一个普通节点分配 Mihomo 端口，并确保节点池中还有另一个普通节点作为目标。" />
+          ) : (
+            <>
+              <SelectInput
+                label="前置节点"
+                value={frontHash}
+                onChange={setFrontHash}
+                options={frontCandidates.map((node) => ({ label: `${node.name} · ${node.assignedPort}`, value: node.hash }))}
+                disabled={props.busy}
+              />
+              <SelectInput
+                label="目标节点"
+                value={targetHash}
+                onChange={setTargetHash}
+                options={targetOptions.map((node) => ({ label: `${node.name} · ${node.assignedPort ?? "未分配"}`, value: node.hash }))}
+                disabled={props.busy}
+              />
+              <TextInput label="链式节点名称" value={chainName} onChange={setChainName} placeholder={selectedFront ? `${selectedFront.name} → 目标` : "可选，留空自动命名"} />
+              <Button
+                icon={<GitBranch size={16} />}
+                loading={props.creatingChain}
+                disabled={props.busy || !frontHash || !targetHash || frontHash === targetHash}
+                onClick={() => props.onCreateChain({ frontHash, targetHash, ...(chainName.trim() ? { name: chainName.trim() } : {}) })}
+              >
+                创建链式节点
+              </Button>
+            </>
           )}
         </div>
       </Panel>

@@ -15,6 +15,7 @@ import {
   Check,
   CheckCircle2,
   CircleDot,
+  GitBranch,
   MessageSquare,
   MinusCircle,
   Search,
@@ -77,6 +78,7 @@ export function NodeTable(props: {
         header: "节点名称",
         cell: ({ row }) => (
           <span className="node-name" title={row.original.name} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {row.original.kind === "chain" ? <GitBranch size={13} className="text-info" aria-label="链式节点" /> : null}
             {row.original.codexReserved ? (
               <Star size={13} className="text-warning" fill="currentColor" aria-label="保留节点" />
             ) : null}

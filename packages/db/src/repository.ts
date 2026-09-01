@@ -12,7 +12,8 @@ import {
   reconcileTickSchema,
   smsRegionHintMemorySchema,
   sub2ApiConnectionConfigSchema,
-  sub2ApiProtectedProxyRuleSchema
+  sub2ApiProtectedProxyRuleSchema,
+  canonicalProxyIdentity
 } from "@mihomo-hive/schemas";
 import type {
   AccountBudgetRecord,
@@ -69,6 +70,8 @@ interface NodeRow {
   type: string;
   region: string;
   raw_json: string;
+  kind?: "direct" | "chain" | null;
+  chain_json?: string | null;
   status: ProxyNode["status"];
   lifecycle_status: NodeLifecycleStatus;
   schedulable: 0 | 1;
@@ -310,6 +313,8 @@ export class HiveRepository {
   }
 
   deleteSubscription(id: string): void {
+    const sourceNodes = this.listNodes().filter((node) => node.sourceId === id).map((node) => node.hash);
+    assertNoDependentChains(this.listNodes(), sourceNodes);
     const transaction = this.sqlite.transaction(() => {
       this.sqlite.prepare("DELETE FROM nodes WHERE source_id = ?").run(id);
       this.sqlite.prepare("DELETE FROM subscriptions WHERE id = ?").run(id);
@@ -320,14 +325,14 @@ export class HiveRepository {
   upsertNodes(nodes: ProxyNode[]): void {
     const statement = this.sqlite.prepare(`
       INSERT INTO nodes (
-        hash, source_id, name, original_name, type, region, raw_json, status,
+        hash, source_id, name, original_name, type, region, raw_json, kind, chain_json, status,
         lifecycle_status, schedulable, protected, sub2api_proxy_id, quality_score,
         assigned_port, last_test_status, last_test_latency_ms, last_test_targets,
         intent_role, backoff_until, backoff_attempts, health_score, last_health_check,
         created_at, updated_at
       )
       VALUES (
-        @hash, @sourceId, @name, @originalName, @type, @region, @rawJson, @status,
+        @hash, @sourceId, @name, @originalName, @type, @region, @rawJson, @kind, @chainJson, @status,
         @lifecycleStatus, @schedulable, @protected, @sub2apiProxyId, @qualityScore,
         @assignedPort, @lastTestStatus, @lastTestLatencyMs, @lastTestTargets,
         @intentRole, @backoffUntil, @backoffAttempts, @healthScore, @lastHealthCheck,
@@ -340,6 +345,8 @@ export class HiveRepository {
         type = excluded.type,
         region = excluded.region,
         raw_json = excluded.raw_json,
+        kind = excluded.kind,
+        chain_json = excluded.chain_json,
         -- 订阅刷新只更新节点元数据，不得把已有运维意图重置为 candidate。
         -- 否则会产生 candidate + sub2api_proxy_id + intent=serving 的矛盾状态。
         lifecycle_status = nodes.lifecycle_status,
@@ -356,6 +363,8 @@ export class HiveRepository {
           type: node.type,
           region: node.region,
           rawJson: JSON.stringify(node.raw),
+          kind: node.kind ?? "direct",
+          chainJson: node.chain ? JSON.stringify(node.chain) : null,
           status: node.status,
           lifecycleStatus: node.lifecycleStatus ?? lifecycleFromStatus(node.status),
           schedulable: node.schedulable ? 1 : 0,
@@ -403,12 +412,28 @@ export class HiveRepository {
         if (!winner) continue;
         const losers = group.slice(1);
         for (const loser of losers) {
+          // Preserve account attribution and chain dependencies while merging
+          // legacy rows into the winner.
+          this.sqlite.prepare("UPDATE accounts SET egress_node_hash = ? WHERE egress_node_hash = ?").run(winner.hash, loser.hash);
+          this.sqlite.prepare("UPDATE nodes SET chain_json = replace(chain_json, ?, ?), raw_json = replace(raw_json, ?, ?) WHERE kind = 'chain'").run(
+            loser.hash,
+            winner.hash,
+            loser.hash,
+            winner.hash
+          );
           this.sqlite.prepare("DELETE FROM nodes WHERE hash = ?").run(loser.hash);
           removed += 1;
         }
         if (winner.hash !== identity) {
           const collision = this.sqlite.prepare("SELECT hash FROM nodes WHERE hash = ?").get(identity) as { hash: string } | undefined;
           if (!collision || collision.hash === winner.hash) {
+            this.sqlite.prepare("UPDATE accounts SET egress_node_hash = ? WHERE egress_node_hash = ?").run(identity, winner.hash);
+            this.sqlite.prepare("UPDATE nodes SET chain_json = replace(chain_json, ?, ?), raw_json = replace(raw_json, ?, ?) WHERE kind = 'chain'").run(
+              winner.hash,
+              identity,
+              winner.hash,
+              identity
+            );
             this.sqlite.prepare("UPDATE nodes SET hash = ? WHERE hash = ?").run(identity, winner.hash);
           }
         }
@@ -457,6 +482,8 @@ export class HiveRepository {
     const statement = this.sqlite.prepare(`
       UPDATE nodes SET
         name = @name,
+        kind = @kind,
+        chain_json = @chainJson,
         status = @status,
         lifecycle_status = @lifecycleStatus,
         schedulable = @schedulable,
@@ -481,6 +508,8 @@ export class HiveRepository {
         statement.run({
           hash: node.hash,
           name: node.name,
+          kind: node.kind ?? "direct",
+          chainJson: node.chain ? JSON.stringify(node.chain) : null,
           status: node.status,
           lifecycleStatus: node.lifecycleStatus ?? lifecycleFromStatus(node.status),
           schedulable: node.schedulable ? 1 : 0,
@@ -514,6 +543,7 @@ export class HiveRepository {
     if (hashes.length === 0) {
       return 0;
     }
+    assertNoDependentChains(this.listNodes(), hashes);
     const statement = this.sqlite.prepare("DELETE FROM nodes WHERE hash = ?");
     const transaction = this.sqlite.transaction((items: string[]) => {
       let deleted = 0;
@@ -1631,6 +1661,8 @@ function normalizeKeywords(values: string[]): string[] {
 }
 
 function nodeFromRow(row: NodeRow): ProxyNode {
+  const raw = JSON.parse(row.raw_json) as Record<string, unknown>;
+  const chain = parseChainJson(row.chain_json) ?? chainFromRaw(raw);
   return {
     hash: row.hash,
     sourceId: row.source_id,
@@ -1638,7 +1670,9 @@ function nodeFromRow(row: NodeRow): ProxyNode {
     originalName: row.original_name,
     type: row.type,
     region: row.region,
-    raw: JSON.parse(row.raw_json) as Record<string, unknown>,
+    raw,
+    kind: row.kind === "chain" || chain ? "chain" : "direct",
+    ...(chain ? { chain } : {}),
     status: row.status,
     lifecycleStatus: row.lifecycle_status ?? lifecycleFromStatus(row.status),
     schedulable: Boolean(row.schedulable),
@@ -1928,8 +1962,58 @@ function nodeKeepScore(node: ProxyNode): number {
   );
 }
 
+function assertNoDependentChains(nodes: ProxyNode[], hashes: string[]): void {
+  const wanted = new Set(hashes);
+  const dependent = nodes.filter(
+    (node) =>
+      node.kind === "chain" &&
+      !wanted.has(node.hash) &&
+      Boolean(node.chain && (wanted.has(node.chain.frontNodeHash) || wanted.has(node.chain.targetNodeHash)))
+  );
+  if (dependent.length > 0) {
+    throw new Error(`无法删除节点：${dependent.map((node) => node.name).join("、")} 依赖所选节点，请先删除这些链式节点。`);
+  }
+}
+
 function identityHash(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return createHash("sha256")
+      .update(stableIdentityString(canonicalProxyIdentity(value as Record<string, unknown>)))
+      .digest("hex");
+  }
   return createHash("sha256").update(stableIdentityString(value)).digest("hex");
+}
+
+function parseChainJson(value: string | null | undefined): ProxyNode["chain"] {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as ProxyNode["chain"];
+    if (
+      parsed &&
+      typeof parsed.frontNodeHash === "string" &&
+      typeof parsed.targetNodeHash === "string" &&
+      typeof parsed.frontNodeName === "string" &&
+      typeof parsed.targetNodeName === "string"
+    ) {
+      return parsed;
+    }
+  } catch {
+    // Corrupt optional metadata should not prevent the node pool from loading.
+  }
+  return undefined;
+}
+
+function chainFromRaw(raw: Record<string, unknown>): ProxyNode["chain"] {
+  const value = raw.__hiveChain;
+  if (!value || typeof value !== "object") return undefined;
+  const chain = value as Record<string, unknown>;
+  if (typeof chain.frontNodeHash !== "string" || typeof chain.targetNodeHash !== "string") return undefined;
+  return {
+    frontNodeHash: chain.frontNodeHash,
+    targetNodeHash: chain.targetNodeHash,
+    frontNodeName: typeof chain.frontNodeName === "string" ? chain.frontNodeName : chain.frontNodeHash.slice(0, 8),
+    targetNodeName: typeof chain.targetNodeName === "string" ? chain.targetNodeName : chain.targetNodeHash.slice(0, 8)
+  };
 }
 
 function stableIdentityString(value: unknown): string {

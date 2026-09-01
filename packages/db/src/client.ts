@@ -46,6 +46,8 @@ function ensureSchema(sqlite: HiveSqlite): void {
       type TEXT NOT NULL,
       region TEXT NOT NULL,
       raw_json TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'direct' CHECK (kind IN ('direct', 'chain')),
+      chain_json TEXT,
       status TEXT NOT NULL CHECK (status IN ('active', 'inactive', 'untested', 'failed')),
       lifecycle_status TEXT NOT NULL DEFAULT 'candidate' CHECK (lifecycle_status IN ('candidate', 'testing', 'schedulable', 'disabled', 'draining', 'cooling_down', 'retired', 'deleted')),
       schedulable INTEGER NOT NULL DEFAULT 0,
@@ -212,6 +214,8 @@ function ensureSchema(sqlite: HiveSqlite): void {
   addColumnIfMissing(sqlite, "nodes", "lifecycle_status", "TEXT NOT NULL DEFAULT 'candidate'");
   addColumnIfMissing(sqlite, "nodes", "schedulable", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(sqlite, "nodes", "protected", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(sqlite, "nodes", "kind", "TEXT NOT NULL DEFAULT 'direct'");
+  addColumnIfMissing(sqlite, "nodes", "chain_json", "TEXT");
   addColumnIfMissing(sqlite, "nodes", "sub2api_proxy_id", "INTEGER");
   addColumnIfMissing(sqlite, "nodes", "quality_score", "INTEGER");
   // ADR 0003: orchestration intent columns

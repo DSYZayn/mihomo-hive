@@ -1,5 +1,54 @@
 import { z } from "zod";
 
+const DISPLAY_ONLY_PROXY_KEYS = new Set(["name", "ps", "remarks", "remark", "display_name"]);
+
+/** Stable connection identity shared by subscription parsing and DB repair. */
+export function canonicalProxyIdentity(raw: Record<string, unknown>): unknown {
+  const chain = raw.__hiveChain;
+  if (chain && typeof chain === "object") {
+    const metadata = chain as Record<string, unknown>;
+    return {
+      kind: "chain",
+      frontNodeHash: String(metadata.frontNodeHash ?? ""),
+      targetNodeHash: String(metadata.targetNodeHash ?? "")
+    };
+  }
+  if (typeof raw.uri === "string") {
+    return { type: String(raw.type ?? "unknown").toLowerCase(), uri: normalizeProxyUri(raw.uri) };
+  }
+  return omitDisplayProxyMetadata(raw);
+}
+
+function normalizeProxyUri(uri: string): string {
+  const value = uri.trim();
+  const hashIndex = value.indexOf("#");
+  const withoutFragment = hashIndex === -1 ? value : value.slice(0, hashIndex);
+  try {
+    const parsed = new URL(withoutFragment);
+    parsed.protocol = parsed.protocol.toLowerCase();
+    parsed.hostname = parsed.hostname.toLowerCase();
+    const entries = Array.from(parsed.searchParams.entries()).sort(([a, av], [b, bv]) =>
+      a === b ? av.localeCompare(bv) : a.localeCompare(b)
+    );
+    parsed.search = "";
+    for (const [key, item] of entries) parsed.searchParams.append(key, item);
+    return parsed.toString();
+  } catch {
+    return withoutFragment;
+  }
+}
+
+function omitDisplayProxyMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitDisplayProxyMetadata);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !DISPLAY_ONLY_PROXY_KEYS.has(key.toLowerCase()))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, omitDisplayProxyMetadata(item)])
+  );
+}
+
 export const nodeStatusSchema = z.enum(["active", "inactive", "untested", "failed"]);
 export type NodeStatus = z.infer<typeof nodeStatusSchema>;
 
@@ -14,6 +63,17 @@ export const nodeLifecycleStatusSchema = z.enum([
   "deleted"
 ]);
 export type NodeLifecycleStatus = z.infer<typeof nodeLifecycleStatusSchema>;
+
+export const proxyNodeKindSchema = z.enum(["direct", "chain"]);
+export type ProxyNodeKind = z.infer<typeof proxyNodeKindSchema>;
+
+export const proxyChainSchema = z.object({
+  frontNodeHash: z.string().min(8),
+  targetNodeHash: z.string().min(8),
+  frontNodeName: z.string().min(1),
+  targetNodeName: z.string().min(1)
+});
+export type ProxyChain = z.infer<typeof proxyChainSchema>;
 
 export const subscriptionSourceSchema = z.object({
   id: z.string().min(1),
@@ -37,6 +97,8 @@ export const proxyNodeSchema = z.object({
   type: z.string().min(1),
   region: z.string().default("unknown"),
   raw: z.record(z.unknown()),
+  kind: proxyNodeKindSchema.optional(),
+  chain: proxyChainSchema.optional(),
   status: nodeStatusSchema.default("untested"),
   lifecycleStatus: nodeLifecycleStatusSchema.default("candidate"),
   schedulable: z.boolean().default(false),

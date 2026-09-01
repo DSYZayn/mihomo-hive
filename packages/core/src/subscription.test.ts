@@ -55,4 +55,10 @@ proxies:
 
     expect(renamed[0]?.hash).toBe(first[0]?.hash);
   });
+
+  it("normalizes URI fragments and query ordering for refresh deduplication", () => {
+    const first = parseSubscription("ss://user:pass@EXAMPLE.com:443?b=2&a=1#JP-1", "source-1");
+    const refreshed = parseSubscription("ss://user:pass@example.com:443?a=1&b=2#JP-1-renamed", "source-1");
+    expect(refreshed[0]?.hash).toBe(first[0]?.hash);
+  });
 });

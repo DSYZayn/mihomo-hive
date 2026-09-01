@@ -44,6 +44,16 @@ export function renderMihomoConfig(
       if (!node.assignedPort) return false;
       const lifecycle = node.lifecycleStatus ?? "candidate";
       if (lifecycle === "retired" || lifecycle === "deleted") return false;
+      if (node.kind === "chain") {
+        const front = nodes.find((candidate) => candidate.hash === node.chain?.frontNodeHash);
+        const target = nodes.find((candidate) => candidate.hash === node.chain?.targetNodeHash);
+        if (!front?.assignedPort || !target) return false;
+        const frontLifecycle = front.lifecycleStatus ?? "candidate";
+        const targetLifecycle = target.lifecycleStatus ?? "candidate";
+        if (frontLifecycle === "retired" || frontLifecycle === "deleted" || targetLifecycle === "retired" || targetLifecycle === "deleted") {
+          return false;
+        }
+      }
       // 不能因为一次业务目标测试失败就拆掉 listener：Sub2API 可能仍有账号
       // 绑在这个固定端口。账号应先由 reconcile 迁走，节点进入 retired/deleted
       // 终态后才可移除 listener，避免制造 connection refused 型全量故障。
@@ -51,10 +61,14 @@ export function renderMihomoConfig(
     })
     .sort((a, b) => Number(a.assignedPort) - Number(b.assignedPort));
 
-  const proxies = activeNodes.map((node) => ({
-    ...node.raw,
-    name: proxyNameForNode(node)
-  }));
+  const proxies = activeNodes.map((node) => {
+    const raw = renderableProxyRaw(node.raw);
+    const front = node.chain ? nodes.find((candidate) => candidate.hash === node.chain?.frontNodeHash) : undefined;
+    if (node.kind === "chain" && front?.assignedPort) {
+      raw["dialer-proxy"] = proxyNameForNode(front);
+    }
+    return { ...raw, name: proxyNameForNode(node) };
+  });
 
   const listeners = activeNodes.map((node) => ({
     name: `hive-${node.assignedPort}`,
@@ -122,4 +136,8 @@ export function renderMihomoConfig(
  */
 export function proxyNameForNode(node: Pick<ProxyNode, "hash" | "assignedPort">): string {
   return `hive-${node.assignedPort}-${node.hash.slice(0, 8)}`;
+}
+
+function renderableProxyRaw(raw: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "__hiveChain"));
 }

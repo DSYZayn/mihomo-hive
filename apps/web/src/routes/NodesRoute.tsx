@@ -72,6 +72,9 @@ export interface NodesRouteProps {
     rebuildMihomo: PendingMutation & { mutate: () => void };
     resetIntent: PendingMutation & { mutate: (input: { hashes: string[]; liftFromRetired?: boolean }) => void };
     deleteSubscription: PendingMutation & { mutate: (input: { id: string }) => void };
+    createChain: PendingMutation & {
+      mutate: (input: { frontHash: string; targetHash: string; name?: string }) => void;
+    };
   };
 }
 
@@ -160,6 +163,8 @@ export function NodesRoute(props: NodesRouteProps) {
             run: async () => m.deleteSubscription.mutate({ id })
           })
         }
+        creatingChain={m.createChain.isPending}
+        onCreateChain={(input) => m.createChain.mutate(input)}
       />
       <div className="nodes-stack">
         <NodeToolbar

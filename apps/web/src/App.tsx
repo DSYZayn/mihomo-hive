@@ -137,7 +137,11 @@ function Dashboard(props: { onLogout: () => void }) {
   const assignedCount = allNodes.filter((node) => node.assignedPort).length;
   const exportableSelectedCount = allNodes.filter((node) => selectedHashes.has(node.hash) && canExportNode(node)).length;
   const sourceNames = React.useMemo(
-    () => new Map((subscriptions.data ?? []).map((source) => [source.id, source.name])),
+    () => {
+      const map = new Map((subscriptions.data ?? []).map((source) => [source.id, source.name] as const));
+      map.set("__hive_chain__", "链式代理");
+      return map;
+    },
     [subscriptions.data]
   );
 
@@ -319,6 +323,19 @@ function Dashboard(props: { onLogout: () => void }) {
     },
     onError: (error) => failTask(setTask, pushToast, "启用调度失败", error.message)
   });
+  const createChain = trpc.nodes.createChain.useMutation({
+    onMutate: () => startTask(setTask, "正在创建链式节点", "生成两跳 Mihomo 节点、分配端口并重载配置。"),
+    onSuccess: async (result) => {
+      await finishTask(
+        setTask,
+        pushToast,
+        result.created ? "链式节点已创建" : "链式节点已存在",
+        result.node ? `${result.node.name} · 端口 ${result.node.assignedPort ?? "-"}` : "已复用现有链式节点。"
+      );
+      await refreshOperationalData();
+    },
+    onError: (error) => failTask(setTask, pushToast, "链式节点创建失败", error.message)
+  });
   const startMihomo = trpc.mihomo.start.useMutation({
     onMutate: () => startTask(setTask, "正在启动 Mihomo", "服务会在后台保持运行。"),
     onSuccess: async (result) => {
@@ -407,6 +424,7 @@ function Dashboard(props: { onLogout: () => void }) {
     rebuildMihomo.isPending ||
     attachToMihomo.isPending ||
     enableScheduling.isPending ||
+    createChain.isPending ||
     resetIntent.isPending ||
     startMihomo.isPending ||
     reloadMihomo.isPending ||
@@ -538,7 +556,8 @@ function Dashboard(props: { onLogout: () => void }) {
             attachToMihomo,
             rebuildMihomo,
             resetIntent,
-            deleteSubscription
+            deleteSubscription,
+            createChain
           }}
         />
       ) : null}

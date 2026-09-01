@@ -1,8 +1,8 @@
 import { Buffer } from "node:buffer";
 import { parse as parseYaml } from "yaml";
 import type { ProxyNode } from "@mihomo-hive/schemas";
-import { sha256 } from "./hash.js";
 import { inferRegion } from "./region.js";
+import { proxyIdentityHash } from "./proxy-identity.js";
 
 type RawProxy = Record<string, unknown> & { name?: unknown; type?: unknown };
 
@@ -116,7 +116,7 @@ function toProxyNode(raw: RawProxy, sourceId: string): ProxyNode {
   const now = new Date().toISOString();
   // 订阅供应商经常会改节点展示名、排序或附加元数据；这些变化不应制造新节点。
   // 指纹只基于连接参数，跨刷新/改名保持稳定，避免节点池不断膨胀。
-  const hash = sha256(canonicalProxyIdentity(raw));
+  const hash = proxyIdentityHash(raw);
   return {
     hash,
     sourceId,
@@ -135,28 +135,4 @@ function toProxyNode(raw: RawProxy, sourceId: string): ProxyNode {
     createdAt: now,
     updatedAt: now
   };
-}
-
-function canonicalProxyIdentity(raw: RawProxy): unknown {
-  if (typeof raw.uri === "string") {
-    return { type: String(raw.type ?? "unknown"), uri: stripUriFragment(raw.uri) };
-  }
-
-  return omitDisplayMetadata(raw);
-}
-
-function stripUriFragment(uri: string): string {
-  const hashIndex = uri.indexOf("#");
-  return hashIndex === -1 ? uri : uri.slice(0, hashIndex);
-}
-
-function omitDisplayMetadata(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(omitDisplayMetadata);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !["name", "ps", "remarks", "remark", "display_name"].includes(key.toLowerCase()))
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, item]) => [key, omitDisplayMetadata(item)])
-  );
 }

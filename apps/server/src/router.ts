@@ -10,6 +10,7 @@ import {
   buildSubscriptionImportPreview,
   CodexAdoptionParseError,
   createSub2ApiClient,
+  createChainProxyNode,
   enumeratePorts,
   filterPreviewImportableNodes,
   filteredExistingNodeHashes,
@@ -162,6 +163,7 @@ export const appRouter = t.router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        ctx.repo.deduplicateNodesByIdentity();
         const source = resolvePreviewSource(ctx.repo, input);
         const content = await fetchSourceContent(ctx.repo, source);
         return buildSubscriptionImportPreview({
@@ -181,6 +183,8 @@ export const appRouter = t.router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        // Normalize legacy rows before comparing a fresh subscription snapshot.
+        ctx.repo.deduplicateNodesByIdentity();
         const existing = input.id ? ctx.repo.listSubscriptions().find((item) => item.id === input.id) : undefined;
         const source =
           existing ??
@@ -211,7 +215,8 @@ export const appRouter = t.router({
         });
         const deletedByFilter = ctx.repo.deleteNodes(deleteHashes);
         ctx.repo.upsertNodes(nodes);
-        return { imported: nodes.length, deletedByFilter, sourceId: filteredSource.id };
+        const deduplicated = ctx.repo.deduplicateNodesByIdentity();
+        return { imported: nodes.length, deletedByFilter, deduplicated, sourceId: filteredSource.id };
       }),
     add: protectedProcedure
       .input(z.object({ name: z.string().min(1), url: z.string().url() }))
@@ -238,6 +243,58 @@ export const appRouter = t.router({
 
   nodes: t.router({
     list: protectedProcedure.query(({ ctx }) => ctx.repo.listNodes()),
+    createChain: protectedProcedure
+      .input(
+        z.object({
+          frontHash: z.string().min(8),
+          targetHash: z.string().min(8),
+          name: z.string().trim().max(160).optional()
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const existingNodes = ctx.repo.listNodes();
+        const front = existingNodes.find((node) => node.hash === input.frontHash);
+        const target = existingNodes.find((node) => node.hash === input.targetHash);
+        if (!front || !target) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "前置节点或目标节点不存在。" });
+        }
+        const duplicate = existingNodes.find(
+          (node) =>
+            node.kind === "chain" &&
+            node.chain?.frontNodeHash === input.frontHash &&
+            node.chain?.targetNodeHash === input.targetHash
+        );
+        if (duplicate) {
+          return { created: false, node: duplicate, listeners: existingNodes.filter((node) => node.assignedPort).length };
+        }
+
+        const node = createChainProxyNode({ front, target, name: input.name });
+        const range = { start: ctx.config.portRangeStart, end: ctx.config.portRangeEnd };
+        const status = await readMihomoStatus(ctx.config);
+        const occupied = status.running ? new Set<number>() : await findOccupiedPorts(ctx.config.listenHost, enumeratePorts(range));
+        const assigned = assignStablePorts({
+          nodes: [...existingNodes, node],
+          range,
+          occupiedPorts: occupied,
+          preserveExisting: true,
+          targetHashes: [node.hash]
+        });
+        const created = assigned.find((candidate) => candidate.hash === node.hash);
+        if (!created?.assignedPort) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "链式节点端口分配失败。" });
+        }
+        ctx.repo.upsertNodes([created]);
+        const rendered = renderMihomoConfig(ctx.repo.listNodes(), ctx.config, codexEgressRenderOpts(ctx.repo));
+        await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+        await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
+        const newStatus = status.running ? await reloadMihomo(ctx.config) : await startMihomo(ctx.config);
+        return {
+          created: true,
+          node: ctx.repo.listNodes().find((candidate) => candidate.hash === node.hash),
+          listeners: rendered.egressMap.length,
+          status: newStatus
+        };
+      }),
     /**
      * P5-AS: 标记/取消「保留节点」—— 专用于账号注册/登录的高质量备用出口。
      * 批量切换；返回更新后的节点列表。
@@ -264,6 +321,11 @@ export const appRouter = t.router({
         })
       )
       .mutation(({ ctx, input }) => {
+        // 退役节点会被 Mihomo 渲染器移除 listener；如果它仍是链式节点的
+        // 前置/目标，直接退役会留下远端映射却没有本地出口，必须先处理链式节点。
+        if (input.lifecycleStatus === "retired") {
+          assertNoChainDependencies(ctx.repo.listNodes(), input.hashes);
+        }
         const nodes = ctx.repo.markNodesLifecycle(input.hashes, input.lifecycleStatus);
         return { updated: nodes.length, nodes };
       }),
@@ -373,6 +435,7 @@ export const appRouter = t.router({
       )
       .mutation(async ({ ctx, input }) => {
         const nodes = selectNodes(ctx.repo.listNodes(), input.hashes);
+        assertNoChainDependencies(ctx.repo.listNodes(), input.hashes);
         if (nodes.some((node) => node.protected)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "包含受保护节点，请先解除保护。" });
         }
@@ -470,6 +533,7 @@ export const appRouter = t.router({
         }
       }),
     import: protectedProcedure.mutation(async ({ ctx }) => {
+      ctx.repo.deduplicateNodesByIdentity();
       let imported = 0;
       for (const source of ctx.repo.listSubscriptions().filter((item) => item.enabled)) {
         const content = source.lastContent ?? (await ctx.repo.fetchSubscriptionContent(source));
@@ -482,7 +546,8 @@ export const appRouter = t.router({
         ctx.repo.upsertNodes(nodes);
         imported += nodes.length;
       }
-      return { imported };
+      const deduplicated = ctx.repo.deduplicateNodesByIdentity();
+      return { imported, deduplicated };
     }),
     assignPorts: protectedProcedure
       .input(z.object({ range: z.string().optional(), skipPortCheck: z.boolean().default(false) }))
@@ -1931,6 +1996,22 @@ function selectNodes(nodes: ProxyNode[], hashes: string[]): ProxyNode[] {
     throw new TRPCError({ code: "NOT_FOUND", message: "部分节点不存在。" });
   }
   return selected;
+}
+
+function assertNoChainDependencies(allNodes: ProxyNode[], hashes: string[]): void {
+  const selectedHashes = new Set(hashes);
+  const dependent = allNodes.filter(
+    (node) =>
+      node.kind === "chain" &&
+      !selectedHashes.has(node.hash) &&
+      Boolean(node.chain && (selectedHashes.has(node.chain.frontNodeHash) || selectedHashes.has(node.chain.targetNodeHash)))
+  );
+  if (dependent.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `所选节点仍被链式节点依赖：${dependent.map((node) => node.name).join("、")}。请先删除链式节点。`
+    });
+  }
 }
 
 async function loadSub2ApiSnapshot(repo: HiveRepository): Promise<{

@@ -19,3 +19,5 @@ export * from "./strategy-switch.js";
 export * from "./sub2api-maintenance.js";
 export * from "./subscription.js";
 export * from "./subscription-preview.js";
+export * from "./proxy-identity.js";
+export * from "./proxy-chain.js";
