@@ -238,8 +238,11 @@ function Dashboard(props: { onLogout: () => void }) {
     onError: (error) => failTask(setTask, pushToast, "节点删除失败", error.message)
   });
   const testNodes = trpc.nodes.test.useMutation({
+    meta: { skipGlobalRefetch: true },
     onMutate: () => startTask(setTask, "正在批量测试", "正在使用 OpenAI 目标检查本地 listener 可用性。"),
-    onSuccess: async (result) => {
+    onSuccess: (result) => {
+      const updates = new Map(result.nodes.map((node) => [node.hash, node] as const));
+      utils.nodes.list.setData(undefined, (current) => current?.map((node) => updates.get(node.hash) ?? node));
       const tone = result.failed > 0 ? "warning" : "success";
       setTask({
         state: result.failed > 0 ? "success" : "success",
@@ -247,7 +250,6 @@ function Dashboard(props: { onLogout: () => void }) {
         detail: `测试 ${result.tested} 个节点，通过 ${result.passed} 个，失败 ${result.failed} 个。`
       });
       pushToast(tone, "批量测试完成", `通过 ${result.passed}/${result.tested}。`);
-      await refreshOperationalData();
     },
     onError: (error) => failTask(setTask, pushToast, "批量测试失败", error.message)
   });

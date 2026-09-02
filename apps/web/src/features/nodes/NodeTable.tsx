@@ -184,6 +184,7 @@ export function NodeTable(props: {
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    autoResetPageIndex: false,
     initialState: {
       pagination: { pageSize: 50 }
     }

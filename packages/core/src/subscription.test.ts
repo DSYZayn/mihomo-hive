@@ -57,8 +57,34 @@ proxies:
   });
 
   it("normalizes URI fragments and query ordering for refresh deduplication", () => {
-    const first = parseSubscription("ss://user:pass@EXAMPLE.com:443?b=2&a=1#JP-1", "source-1");
-    const refreshed = parseSubscription("ss://user:pass@example.com:443?a=1&b=2#JP-1-renamed", "source-1");
+    const first = parseSubscription("ss://user:pass@EXAMPLE.com:443?b=2&a=1&sub=primary#JP-1", "source-1");
+    const refreshed = parseSubscription("ss://user:pass@example.com:443?a=1&b=2&sub=backup#JP-1-renamed", "source-1");
     expect(refreshed[0]?.hash).toBe(first[0]?.hash);
+  });
+
+  it("keeps a stable fingerprint when provider metadata changes", () => {
+    const first = parseSubscription(
+      `proxies:\n  - name: JP-1\n    type: trojan\n    server: EXAMPLE.com\n    port: "443"\n    password: secret\n    sni: EDGE.example.com\n    provider: primary\n    description: old\n`,
+      "source-1"
+    );
+    const refreshed = parseSubscription(
+      `proxies:\n  - name: JP-1 Premium\n    type: TROJAN\n    server: example.com\n    port: 443\n    password: secret\n    sni: edge.example.com\n    provider: backup\n    description: new\n`,
+      "source-1"
+    );
+
+    expect(refreshed[0]?.hash).toBe(first[0]?.hash);
+  });
+
+  it("distinguishes credentials and transport paths", () => {
+    const first = parseSubscription(
+      `proxies:\n  - name: US-1\n    type: vless\n    server: example.com\n    port: 443\n    uuid: user-1\n    network: ws\n    ws-opts:\n      path: /primary\n`,
+      "source-1"
+    );
+    const changed = parseSubscription(
+      `proxies:\n  - name: US-1\n    type: vless\n    server: example.com\n    port: 443\n    uuid: user-2\n    network: ws\n    ws-opts:\n      path: /secondary\n`,
+      "source-1"
+    );
+
+    expect(changed[0]?.hash).not.toBe(first[0]?.hash);
   });
 });

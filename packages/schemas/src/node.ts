@@ -1,6 +1,38 @@
 import { z } from "zod";
 
-const DISPLAY_ONLY_PROXY_KEYS = new Set(["name", "ps", "remarks", "remark", "display_name"]);
+const NON_IDENTITY_PROXY_KEYS = new Set([
+  "name",
+  "ps",
+  "remarks",
+  "remark",
+  "display-name",
+  "provider",
+  "provider-name",
+  "provider-id",
+  "sub",
+  "sub-id",
+  "subscription",
+  "subscription-id",
+  "subscription-name",
+  "source",
+  "source-id",
+  "tag",
+  "label",
+  "description"
+]);
+
+const NON_IDENTITY_URI_QUERY_KEYS = new Set([
+  "provider",
+  "provider-id",
+  "sub",
+  "sub-id",
+  "subscription",
+  "subscription-id",
+  "source",
+  "source-id",
+  "tag",
+  "label"
+]);
 
 /** Stable connection identity shared by subscription parsing and DB repair. */
 export function canonicalProxyIdentity(raw: Record<string, unknown>): unknown {
@@ -16,7 +48,7 @@ export function canonicalProxyIdentity(raw: Record<string, unknown>): unknown {
   if (typeof raw.uri === "string") {
     return { type: String(raw.type ?? "unknown").toLowerCase(), uri: normalizeProxyUri(raw.uri) };
   }
-  return omitDisplayProxyMetadata(raw);
+  return omitNonIdentityProxyMetadata(raw);
 }
 
 function normalizeProxyUri(uri: string): string {
@@ -27,9 +59,9 @@ function normalizeProxyUri(uri: string): string {
     const parsed = new URL(withoutFragment);
     parsed.protocol = parsed.protocol.toLowerCase();
     parsed.hostname = parsed.hostname.toLowerCase();
-    const entries = Array.from(parsed.searchParams.entries()).sort(([a, av], [b, bv]) =>
-      a === b ? av.localeCompare(bv) : a.localeCompare(b)
-    );
+    const entries = Array.from(parsed.searchParams.entries())
+      .filter(([key]) => !NON_IDENTITY_URI_QUERY_KEYS.has(normalizeProxyKey(key)))
+      .sort(([a, av], [b, bv]) => (a === b ? av.localeCompare(bv) : a.localeCompare(b)));
     parsed.search = "";
     for (const [key, item] of entries) parsed.searchParams.append(key, item);
     return parsed.toString();
@@ -38,15 +70,31 @@ function normalizeProxyUri(uri: string): string {
   }
 }
 
-function omitDisplayProxyMetadata(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(omitDisplayProxyMetadata);
+function omitNonIdentityProxyMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => omitNonIdentityProxyMetadata(item));
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !DISPLAY_ONLY_PROXY_KEYS.has(key.toLowerCase()))
+      .filter(([key]) => !NON_IDENTITY_PROXY_KEYS.has(normalizeProxyKey(key)))
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, item]) => [key, omitDisplayProxyMetadata(item)])
+      .map(([key, item]) => {
+        const normalizedKey = normalizeProxyKey(key);
+        if (typeof item === "string" && ["server", "host", "sni", "servername"].includes(normalizedKey)) {
+          return [key, item.trim().toLowerCase()];
+        }
+        if (normalizedKey === "type" && typeof item === "string") {
+          return [key, item.trim().toLowerCase()];
+        }
+        if (normalizedKey === "port" && typeof item === "string" && /^\d+$/.test(item.trim())) {
+          return [key, Number(item.trim())];
+        }
+        return [key, omitNonIdentityProxyMetadata(item)];
+      })
   );
+}
+
+function normalizeProxyKey(key: string): string {
+  return key.trim().toLowerCase().replaceAll("_", "-");
 }
 
 export const nodeStatusSchema = z.enum(["active", "inactive", "untested", "failed"]);

@@ -741,7 +741,8 @@ export const appRouter = t.router({
           tested: tested.length,
           passed: tested.filter((node) => node.status === "active").length,
           failed: tested.filter((node) => node.status === "failed").length,
-          gated
+          gated,
+          nodes: tested
         };
       })
   }),

@@ -8,12 +8,12 @@ import {
   createSub2ApiClient,
   enumeratePorts,
   findOccupiedPorts,
+  filterPreviewImportableNodes,
   hashPassword,
   loadRuntimeConfig,
   mapWithConcurrency,
   measureProxyTcpLatency,
   parsePortRange,
-  parseSubscription,
   planSub2ApiAssignments,
   renderMihomoConfig,
   resolveProxyTestTargets,
@@ -131,15 +131,23 @@ nodes
   .description("Parse fetched subscription content and upsert nodes")
   .action(async () => {
     const { repo } = await openRepo();
+    repo.deduplicateNodesByIdentity();
     let imported = 0;
     for (const source of repo.listSubscriptions().filter((item) => item.enabled)) {
       const content = source.lastContent ?? (await repo.fetchSubscriptionContent(source));
-      const parsed = parseSubscription(content, source.id);
-      repo.upsertNodes(parsed);
-      imported += parsed.length;
-      console.log(`Imported ${parsed.length} nodes from ${source.name}`);
+      const nodes = filterPreviewImportableNodes({
+        source,
+        content,
+        existingNodes: repo.listNodes(),
+        excludeKeywords: source.excludeKeywords
+      });
+      repo.upsertNodes(nodes);
+      imported += nodes.length;
+      console.log(`Imported ${nodes.length} nodes from ${source.name}`);
     }
+    const deduplicated = repo.deduplicateNodesByIdentity();
     console.log(`Total imported: ${imported}`);
+    if (deduplicated > 0) console.log(`Merged duplicates: ${deduplicated}`);
   });
 
 nodes

@@ -77,4 +77,22 @@ proxies:
       excludeKeywords: ["Hong Kong"]
     })).toEqual([existing[0]?.hash]);
   });
+
+  it("updates an existing node when only provider metadata changed", () => {
+    const existing = parseSubscription(
+      `proxies:\n  - name: SG-1\n    type: trojan\n    server: sg.example.com\n    port: 443\n    password: secret\n    provider: primary\n`,
+      "source-1"
+    );
+    const content = `proxies:\n  - name: SG-1 Premium\n    type: trojan\n    server: sg.example.com\n    port: 443\n    password: secret\n    provider: backup\n`;
+    const input = {
+      source: { id: "source-1", name: "primary", kind: "url" as const, value: "https://example.com/sub" },
+      content,
+      existingNodes: existing
+    };
+    const preview = buildSubscriptionImportPreview(input);
+
+    expect(preview.items).toHaveLength(1);
+    expect(preview.items[0]?.action).toBe("update");
+    expect(filterPreviewImportableNodes(input)[0]?.hash).toBe(existing[0]?.hash);
+  });
 });
