@@ -129,6 +129,111 @@ describe("renderMihomoConfig", () => {
     });
     expect(chainProxy).not.toHaveProperty("__hiveChain");
   });
+
+  it("expands a legacy URI-only target before rendering a chain", () => {
+    const front: ProxyNode = {
+      hash: "front000abcdef",
+      sourceId: "sample",
+      name: "HK",
+      originalName: "HK",
+      type: "ss",
+      region: "unknown",
+      raw: { type: "ss", server: "front.example.com", port: 443, cipher: "aes-128-gcm", password: "front" },
+      status: "active",
+      lifecycleStatus: "schedulable",
+      schedulable: true,
+      protected: false,
+      assignedPort: 10001,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    const { assignedPort: _frontPort, ...frontWithoutPort } = front;
+    const target: ProxyNode = {
+      ...frontWithoutPort,
+      hash: "target00abcdef",
+      name: "US",
+      originalName: "US",
+      raw: { type: "trojan", uri: "trojan://target-secret@us.example.com:443?sni=edge.us.example.com#US" }
+    };
+    const chain: ProxyNode = {
+      ...front,
+      hash: "chain000abcdef",
+      name: "HK -> US",
+      originalName: "HK -> US",
+      kind: "chain",
+      chain: { frontNodeHash: front.hash, targetNodeHash: target.hash, frontNodeName: front.name, targetNodeName: target.name },
+      raw: { type: "trojan", uri: "trojan://stale@stale.example.com:443#stale", __hiveChain: { frontNodeHash: front.hash, targetNodeHash: target.hash } },
+      assignedPort: 10002
+    };
+    const document = parse(renderMihomoConfig([front, target, chain], defaultRuntimeConfig).yaml) as { proxies: Array<Record<string, unknown>> };
+    const chainProxy = document.proxies.find((proxy) => proxy.name === proxyNameForNode(chain));
+    expect(chainProxy).toMatchObject({
+      type: "trojan",
+      server: "us.example.com",
+      port: 443,
+      password: "target-secret",
+      sni: "edge.us.example.com",
+      "dialer-proxy": proxyNameForNode(front)
+    });
+    expect(chainProxy).not.toHaveProperty("uri");
+  });
+
+  it("expands a full-base64 Shadowsocks target before applying dialer-proxy", () => {
+    const front: ProxyNode = {
+      hash: "frontss000abcdef",
+      sourceId: "sample",
+      name: "HK",
+      originalName: "HK",
+      type: "ss",
+      region: "unknown",
+      raw: { type: "ss", server: "front.example.com", port: 443, cipher: "aes-128-gcm", password: "front" },
+      status: "active",
+      lifecycleStatus: "schedulable",
+      schedulable: true,
+      protected: false,
+      assignedPort: 10001,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    const target: ProxyNode = {
+      ...front,
+      hash: "targetss000abcdef",
+      name: "US",
+      originalName: "US",
+      raw: {
+        type: "ss",
+        uri: `ss://${Buffer.from("aes-256-gcm:target@example.com:443", "utf8").toString("base64url")}#US`
+      }
+    };
+    const chain: ProxyNode = {
+      ...front,
+      hash: "chainss000abcdef",
+      name: "HK -> US",
+      originalName: "HK -> US",
+      kind: "chain",
+      chain: { frontNodeHash: front.hash, targetNodeHash: target.hash, frontNodeName: front.name, targetNodeName: target.name },
+      raw: { type: "ss", uri: "ss://stale#stale", __hiveChain: { frontNodeHash: front.hash, targetNodeHash: target.hash } },
+      assignedPort: 10002
+    };
+
+    const document = parse(renderMihomoConfig([front, target, chain], defaultRuntimeConfig).yaml) as { proxies: Array<Record<string, unknown>> };
+    const chainProxy = document.proxies.find((proxy) => proxy.name === proxyNameForNode(chain));
+    expect(chainProxy).toMatchObject({
+      type: "ss",
+      server: "example.com",
+      port: 443,
+      cipher: "aes-256-gcm",
+      password: "target",
+      "dialer-proxy": proxyNameForNode(front)
+    });
+    expect(chainProxy).not.toHaveProperty("uri");
+  });
 });
 
 describe("renderMihomoConfig codex-egress (外置 agent)", () => {

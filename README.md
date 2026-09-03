@@ -21,7 +21,7 @@
 
 不依赖任何外部系统就能用：
 
-- 解析 Clash YAML 订阅 + URI 形式（vmess 完整解析；其他协议保留原始 URI 供 Mihomo 直接消费）
+- 解析 Clash YAML 订阅 + 常见 URI 形式（ss、ssr、vmess、vless、trojan、hysteria2、tuic、socks5、http），统一展开为 Mihomo proxy 配置
 - 节点稳定 hash 去重；按地区、关键词、协议筛选
 - 订阅自动定期刷新，新节点自动入池；被过滤且未托管的旧节点自动删除，已映射到 Sub2API 的节点会保留
 - 双段延迟测试：

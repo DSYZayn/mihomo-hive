@@ -33,6 +33,29 @@ describe("HiveRepository node identity deduplication", () => {
     expect(nodes).toHaveLength(1);
     expect(nodes[0]?.assignedPort).toBe(10001);
   });
+
+  it("merges a legacy URI-only row with the expanded Mihomo endpoint", () => {
+    repo.upsertNodes([
+      node("legacy-uri", "SG-1", { uri: "trojan://secret@SG.EXAMPLE.com:443?sni=edge.example.com#old" }, 10001),
+      node("expanded", "SG-1 Premium", { server: "sg.example.com", port: 443, sni: "edge.example.com" })
+    ]);
+
+    expect(repo.deduplicateNodesByIdentity()).toBe(1);
+    const nodes = repo.listNodes();
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]?.assignedPort).toBe(10001);
+  });
+
+  it("merges a full-base64 Shadowsocks URI row with its expanded endpoint", () => {
+    const uri = `ss://${Buffer.from("aes-256-gcm:secret@sg.example.com:443", "utf8").toString("base64url")}#old`;
+    repo.upsertNodes([
+      node("legacy-full-ss", "SG-1", { type: "ss", uri }, 10001),
+      node("expanded-full-ss", "SG-1 Premium", { type: "ss", server: "sg.example.com", port: 443, cipher: "aes-256-gcm", password: "secret" })
+    ]);
+
+    expect(repo.deduplicateNodesByIdentity()).toBe(1);
+    expect(repo.listNodes()).toHaveLength(1);
+  });
 });
 
 function node(hash: string, name: string, options: Record<string, unknown>, assignedPort?: number): ProxyNode {

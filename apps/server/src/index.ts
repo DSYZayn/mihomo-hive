@@ -28,6 +28,10 @@ import { appRouter } from "./router.js";
 const config = await loadRuntimeConfig();
 const sqlite = openSqlite(config.databasePath);
 const repo = new HiveRepository(sqlite, { subscriptionUserAgent: config.subscriptionUserAgent });
+const startupDeduplicated = repo.deduplicateNodesByIdentity();
+if (startupDeduplicated > 0) {
+  console.log(`Merged ${startupDeduplicated} duplicate node(s) on startup.`);
+}
 const app = new Hono();
 const sessionCookieName = "mihomo_hive_session";
 const sessionTtlSeconds = 60 * 60 * 24 * 30;

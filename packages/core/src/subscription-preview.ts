@@ -5,6 +5,7 @@ import {
   type SubscriptionSource
 } from "@mihomo-hive/schemas";
 import { parseSubscription } from "./subscription.js";
+import { proxyIdentityHash } from "./proxy-identity.js";
 
 export interface BuildSubscriptionPreviewInput {
   source: Pick<SubscriptionSource, "id" | "name" | "kind" | "value">;
@@ -15,13 +16,16 @@ export interface BuildSubscriptionPreviewInput {
 
 export function buildSubscriptionImportPreview(input: BuildSubscriptionPreviewInput): SubscriptionImportPreview {
   const parsed = parseSubscription(input.content, input.source.id ?? "preview");
-  const existing = new Map(input.existingNodes.map((node) => [node.hash, node]));
+  // Match by canonical connection identity rather than trusting a legacy row's
+  // persisted hash. Older imports used opaque URI hashes, while a fresh parse
+  // now expands the same endpoint into Mihomo fields.
+  const existing = new Map(input.existingNodes.map((node) => [proxyIdentityHash(node.raw), node]));
   const seen = new Set<string>();
   const excludeKeywords = normalizeKeywords(input.excludeKeywords ?? []);
 
   const items = parsed.map((node) => {
     const matchedKeywords = matchKeywords(node, excludeKeywords);
-    const existingNode = existing.get(node.hash);
+    const existingNode = existing.get(proxyIdentityHash(node.raw));
     const duplicate = seen.has(node.hash);
     seen.add(node.hash);
 
@@ -63,15 +67,26 @@ export function buildSubscriptionImportPreview(input: BuildSubscriptionPreviewIn
 
 export function filteredExistingNodeHashes(input: BuildSubscriptionPreviewInput): string[] {
   const preview = buildSubscriptionImportPreview(input);
-  return preview.items.filter((item) => item.action === "skip_filtered" && item.deletesExisting).map((item) => item.hash);
+  const parsed = parseSubscription(input.content, input.source.id ?? "preview");
+  const existing = new Map(input.existingNodes.map((node) => [proxyIdentityHash(node.raw), node]));
+  return preview.items
+    .map((item, index) => ({ item, node: parsed[index] }))
+    .filter(({ item }) => item.action === "skip_filtered" && item.deletesExisting)
+    .map(({ item, node }) => (node ? existing.get(proxyIdentityHash(node.raw))?.hash ?? item.hash : item.hash));
 }
 
 export function filterPreviewImportableNodes(input: BuildSubscriptionPreviewInput): ProxyNode[] {
   const preview = buildSubscriptionImportPreview(input);
   const parsed = parseSubscription(input.content, input.source.id ?? "preview");
+  const existing = new Map(input.existingNodes.map((node) => [proxyIdentityHash(node.raw), node]));
   return parsed.filter((_, index) => {
     const item = preview.items[index];
     return item?.action === "import" || item?.action === "update";
+  }).map((node) => {
+    const existingNode = existing.get(proxyIdentityHash(node.raw));
+    // Preserve a legacy row's primary hash on update so upsert hits the
+    // existing record even when the identity representation changed.
+    return existingNode ? { ...node, hash: existingNode.hash } : node;
   });
 }
 

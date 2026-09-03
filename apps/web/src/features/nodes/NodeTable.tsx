@@ -5,6 +5,7 @@ import {
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
+  type PaginationState,
   type ColumnDef,
   type SortingState
 } from "@tanstack/react-table";
@@ -49,6 +50,9 @@ export function NodeTable(props: {
   onToggleNode: (hash: string, selected: boolean) => void;
 }) {
   const [sorting, setSorting] = React.useState<SortingState>([{ id: "assignedPort", desc: false }]);
+  // Keep pagination stable while background health polling or a test result
+  // updates the table data in place.
+  const [pagination, setPagination] = React.useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
   const columns = React.useMemo<ColumnDef<ProxyNode>[]>(
     () => [
       {
@@ -179,16 +183,22 @@ export function NodeTable(props: {
   const table = useReactTable({
     data: props.filteredNodes,
     columns,
-    state: { sorting },
+    state: { sorting, pagination },
     onSortingChange: setSorting,
+    onPaginationChange: setPagination,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    autoResetPageIndex: false,
-    initialState: {
-      pagination: { pageSize: 50 }
-    }
+    autoResetPageIndex: false
   });
+
+  React.useEffect(() => {
+    setPagination((current) => {
+      const pageCount = Math.max(1, Math.ceil(props.filteredNodes.length / current.pageSize));
+      const pageIndex = Math.min(current.pageIndex, pageCount - 1);
+      return pageIndex === current.pageIndex ? current : { ...current, pageIndex };
+    });
+  }, [props.filteredNodes.length]);
 
   return (
     <section className="nodes-workspace">

@@ -1,5 +1,6 @@
 import { stringify } from "yaml";
 import type { ProxyNode, RuntimeConfig } from "@mihomo-hive/schemas";
+import { parseProxyUri } from "./subscription.js";
 
 export interface RenderedMihomo {
   yaml: string;
@@ -142,5 +143,11 @@ export function proxyNameForNode(node: Pick<ProxyNode, "hash" | "assignedPort">)
 }
 
 function renderableProxyRaw(raw: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "__hiveChain"));
+  const clean = Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "__hiveChain"));
+  if (typeof clean.uri === "string" && (typeof clean.server !== "string" || typeof clean.port !== "number")) {
+    const expanded = parseProxyUri(clean.uri, typeof clean.name === "string" ? clean.name : "proxy");
+    if (expanded) return Object.fromEntries(Object.entries(expanded).filter(([key]) => key !== "uri" && key !== "__hiveChain"));
+  }
+  if (typeof clean.server === "string" && typeof clean.port === "number") delete clean.uri;
+  return clean;
 }

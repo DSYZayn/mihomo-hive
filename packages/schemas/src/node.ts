@@ -46,9 +46,11 @@ export function canonicalProxyIdentity(raw: Record<string, unknown>): unknown {
     };
   }
   if (typeof raw.uri === "string") {
+    const parsed = parseUriIdentity(raw.uri);
+    if (parsed) return applyIdentityDefaults(parsed);
     return { type: String(raw.type ?? "unknown").toLowerCase(), uri: normalizeProxyUri(raw.uri) };
   }
-  return omitNonIdentityProxyMetadata(raw);
+  return applyIdentityDefaults(omitNonIdentityProxyMetadata(raw) as Record<string, unknown>);
 }
 
 function normalizeProxyUri(uri: string): string {
@@ -79,22 +81,263 @@ function omitNonIdentityProxyMetadata(value: unknown): unknown {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, item]) => {
         const normalizedKey = normalizeProxyKey(key);
-        if (typeof item === "string" && ["server", "host", "sni", "servername"].includes(normalizedKey)) {
-          return [key, item.trim().toLowerCase()];
+        const canonicalKey = canonicalProxyKey(normalizedKey);
+        if (typeof item === "string" && ["server", "host", "sni", "servername", "server-name", "peer"].includes(normalizedKey)) {
+          return [canonicalKey, item.trim().toLowerCase()];
         }
         if (normalizedKey === "type" && typeof item === "string") {
-          return [key, item.trim().toLowerCase()];
+          return [canonicalKey, normalizeProxyType(item)];
         }
         if (normalizedKey === "port" && typeof item === "string" && /^\d+$/.test(item.trim())) {
-          return [key, Number(item.trim())];
+          return [canonicalKey, Number(item.trim())];
         }
-        return [key, omitNonIdentityProxyMetadata(item)];
+        if (normalizedKey === "tls" && typeof item === "string") {
+          return [canonicalKey, item.trim().toLowerCase() === "true"];
+        }
+        return [canonicalKey, omitNonIdentityProxyMetadata(item)];
       })
   );
 }
 
 function normalizeProxyKey(key: string): string {
-  return key.trim().toLowerCase().replaceAll("_", "-");
+  return key
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase()
+    .replaceAll("_", "-");
+}
+
+function canonicalProxyKey(key: string): string {
+  switch (key) {
+    case "add":
+    case "address":
+      return "server";
+    case "servername":
+    case "server-name":
+    case "peer":
+      return "sni";
+    case "aid":
+      return "alter-id";
+    case "scy":
+      return "cipher";
+    case "net":
+      return "network";
+    case "pwd":
+    case "pass":
+      return "password";
+    default:
+      return key;
+  }
+}
+
+function normalizeProxyType(value: string): string {
+  const type = value.trim().toLowerCase();
+  if (type === "socks") return "socks5";
+  if (type === "hy2" || type === "hysteria") return "hysteria2";
+  return type;
+}
+
+function applyIdentityDefaults(value: Record<string, unknown>): Record<string, unknown> {
+  const type = typeof value.type === "string" ? value.type.toLowerCase() : "";
+  if (type === "trojan" && value.tls === undefined) value.tls = true;
+  if (type === "vless") {
+    if (value.encryption === undefined) value.encryption = "none";
+    if (value.security === "none" || value.security === "tls" || value.security === "reality") delete value.security;
+    if (value.network === "tcp") delete value.network;
+  }
+  if ((type === "trojan" || type === "hysteria2") && value.network === "tcp") {
+    delete value.network;
+  }
+  if (type === "vmess") {
+    if (value["alter-id"] === undefined) value["alter-id"] = 0;
+    if (value.cipher === undefined) value.cipher = "auto";
+    if (value.tls === undefined) value.tls = false;
+    if (value.network === undefined) value.network = "tcp";
+  }
+  return value;
+}
+
+/** Canonicalize legacy URI-only rows so refreshes can merge them with YAML. */
+function parseUriIdentity(uri: string): Record<string, unknown> | undefined {
+  const value = uri.trim();
+  const protocol = value.match(/^([a-z0-9+.-]+):\/\//i)?.[1]?.toLowerCase();
+  if (!protocol) return undefined;
+  if (protocol === "vmess") {
+    try {
+      const data = JSON.parse(decodeBase64(value.slice("vmess://".length))) as Record<string, unknown>;
+      return omitNonIdentityProxyMetadata({
+        type: "vmess",
+        server: data.add,
+        port: Number(data.port),
+        uuid: data.id,
+        "alter-id": Number(data.aid ?? 0),
+        cipher: data.scy ?? "auto",
+        tls: data.tls === "tls",
+        network: data.net,
+        ...(data.host || data.path
+          ? {
+              "ws-opts": {
+                ...(data.path ? { path: data.path } : {}),
+                ...(data.host ? { headers: { Host: data.host } } : {})
+              }
+            }
+          : {})
+      }) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+  }
+  if (protocol === "ssr") {
+    try {
+      const decoded = decodeBase64(value.slice("ssr://".length));
+      const [endpoint = "", query = ""] = decoded.split("/?", 2);
+      const [server, port, ssrProtocol, method, obfs, encodedPassword] = endpoint.split(":");
+      if (!server || !port || !ssrProtocol || !method || !obfs || !encodedPassword) return undefined;
+      const result: Record<string, unknown> = {
+        type: "ssr",
+        server,
+        port: Number(port),
+        protocol: ssrProtocol,
+        cipher: method,
+        obfs,
+        password: decodeBase64(encodedPassword)
+      };
+      for (const [key, item] of new URLSearchParams(query)) {
+        if (key === "obfsparam") result["obfs-param"] = decodeBase64(item);
+        if (key === "protoparam") result["protocol-param"] = decodeBase64(item);
+      }
+      return omitNonIdentityProxyMetadata(result) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
+  }
+  if (protocol === "ss") {
+    const fullBase64 = parseFullBase64ShadowsocksIdentity(value);
+    if (fullBase64) return fullBase64;
+  }
+  try {
+    const parsed = new URL(value);
+    const type = protocol === "socks" ? "socks5" : protocol === "hy2" ? "hysteria2" : protocol;
+    const result: Record<string, unknown> = { type, server: parsed.hostname };
+    if (parsed.port) result.port = Number(parsed.port);
+    const username = safeDecodeUri(parsed.username);
+    const password = safeDecodeUri(parsed.password);
+    if (type === "ss") {
+      const decodedUser = decodeBase64(username);
+      const methodAndPassword = decodedUser.includes(":") ? decodedUser : `${username}:${password}`;
+      const separator = methodAndPassword.indexOf(":");
+      if (separator > 0) {
+        result.cipher = methodAndPassword.slice(0, separator);
+        result.password = methodAndPassword.slice(separator + 1);
+      }
+    } else if (type === "vless") {
+      result.uuid = username;
+      result.encryption = parsed.searchParams.get("encryption") ?? "none";
+    } else if (type === "trojan") {
+      result.password = username || password;
+    } else if (username) {
+      result.username = username;
+      if (password) result.password = password;
+    }
+    for (const [key, item] of parsed.searchParams.entries()) {
+      const normalized = normalizeProxyKey(key);
+      if (NON_IDENTITY_URI_QUERY_KEYS.has(normalized)) continue;
+      if (["sni", "peer", "servername", "server-name"].includes(normalized)) result.sni = item;
+      else if (normalized === "type" || normalized === "network") {
+        if (item !== "tcp") result.network = item;
+      } else if (normalized === "path") {
+        const wsOpts = (result["ws-opts"] as Record<string, unknown> | undefined) ?? {};
+        result["ws-opts"] = { ...wsOpts, path: item };
+      } else if (normalized === "host") {
+        const wsOpts = (result["ws-opts"] as Record<string, unknown> | undefined) ?? {};
+        const headers = (wsOpts.headers as Record<string, unknown> | undefined) ?? {};
+        result["ws-opts"] = { ...wsOpts, headers: { ...headers, Host: item } };
+      } else if (normalized === "security") {
+        result.security = item;
+        if (item === "tls" || item === "reality") result.tls = true;
+      } else if (normalized === "pbk" || normalized === "public-key") {
+        const realityOpts = (result["reality-opts"] as Record<string, unknown> | undefined) ?? {};
+        result["reality-opts"] = { ...realityOpts, "public-key": item };
+      } else if (normalized === "sid" || normalized === "short-id") {
+        const realityOpts = (result["reality-opts"] as Record<string, unknown> | undefined) ?? {};
+        result["reality-opts"] = { ...realityOpts, "short-id": item };
+      } else if (normalized === "fp" || normalized === "fingerprint") {
+        result["client-fingerprint"] = item;
+      } else if (normalized === "flow") {
+        result.flow = item;
+      } else if (normalized === "insecure" || normalized === "allow-insecure") {
+        result["skip-cert-verify"] = item === "1" || item === "true";
+      } else if (normalized !== "encryption") {
+        result[normalized] = item;
+      }
+    }
+    return omitNonIdentityProxyMetadata(result) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Canonical identity for SIP002's full-base64 `ss://` form. */
+function parseFullBase64ShadowsocksIdentity(value: string): Record<string, unknown> | undefined {
+  const body = value.slice("ss://".length).split("#", 1)[0] ?? "";
+  const queryIndex = body.indexOf("?");
+  const encoded = queryIndex === -1 ? body : body.slice(0, queryIndex).replace(/\/$/, "");
+  if (!encoded || encoded.includes("@") || encoded.includes(":")) return undefined;
+  const decoded = safeDecodeUri(decodeBase64(encoded));
+  const at = decoded.lastIndexOf("@");
+  if (at <= 0) return undefined;
+  const credentials = decoded.slice(0, at);
+  const endpoint = decoded.slice(at + 1);
+  const separator = credentials.indexOf(":");
+  if (separator <= 0 || !endpoint) return undefined;
+  try {
+    const parsed = new URL(`ss://${endpoint}`);
+    if (!parsed.hostname || !parsed.port) return undefined;
+    const result: Record<string, unknown> = {
+      type: "ss",
+      server: parsed.hostname,
+      port: Number(parsed.port),
+      cipher: credentials.slice(0, separator),
+      password: credentials.slice(separator + 1)
+    };
+    if (queryIndex !== -1) {
+      const plugin = safeDecodeUri(body.slice(queryIndex + 1).replace(/^plugin=/, ""));
+      if (plugin) {
+        const [name, ...options] = plugin.split(";");
+        if (name) {
+          result.plugin = name;
+          const pluginOpts: Record<string, string> = {};
+          for (const option of options) {
+            const optionSeparator = option.indexOf("=");
+            if (optionSeparator > 0) pluginOpts[option.slice(0, optionSeparator)] = option.slice(optionSeparator + 1);
+          }
+          if (Object.keys(pluginOpts).length > 0) result["plugin-opts"] = pluginOpts;
+        }
+      }
+    }
+    return omitNonIdentityProxyMetadata(result) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeBase64(value: string): string {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    return decodeURIComponent(
+      Array.from(atob(normalized), (char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`).join("")
+    );
+  } catch {
+    return value;
+  }
+}
+
+function safeDecodeUri(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 export const nodeStatusSchema = z.enum(["active", "inactive", "untested", "failed"]);

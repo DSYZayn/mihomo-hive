@@ -239,7 +239,12 @@ function Dashboard(props: { onLogout: () => void }) {
   });
   const testNodes = trpc.nodes.test.useMutation({
     meta: { skipGlobalRefetch: true },
-    onMutate: () => startTask(setTask, "正在批量测试", "正在使用 OpenAI 目标检查本地 listener 可用性。"),
+    onMutate: async () => {
+      // Do not let an interval refetch race the mutation and overwrite the
+      // current table while the test is still producing per-node results.
+      await utils.nodes.list.cancel();
+      return startTask(setTask, "正在批量测试", "正在使用 OpenAI 目标检查本地 listener 可用性。");
+    },
     onSuccess: (result) => {
       const updates = new Map(result.nodes.map((node) => [node.hash, node] as const));
       utils.nodes.list.setData(undefined, (current) => current?.map((node) => updates.get(node.hash) ?? node));

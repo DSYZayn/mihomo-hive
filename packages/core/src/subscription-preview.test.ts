@@ -95,4 +95,43 @@ proxies:
     expect(preview.items[0]?.action).toBe("update");
     expect(filterPreviewImportableNodes(input)[0]?.hash).toBe(existing[0]?.hash);
   });
+
+  it("matches legacy URI-only rows before the repository repair pass", () => {
+    const parsed = parseSubscription("trojan://secret@sg.example.com:443?sni=edge.example.com#SG-1", "source-1")[0]!;
+    const existing = [
+      {
+        ...parsed,
+        hash: "legacy-uri-hash",
+        raw: { name: "old", type: "trojan", uri: "trojan://secret@SG.EXAMPLE.com:443?sni=edge.example.com#old" }
+      }
+    ];
+    const input = {
+      source: { id: "source-1", name: "primary", kind: "url" as const, value: "https://example.com/sub" },
+      content: "trojan://secret@sg.example.com:443?sni=edge.example.com#SG-1",
+      existingNodes: existing
+    } as const;
+    const preview = buildSubscriptionImportPreview(input);
+
+    expect(preview.items[0]?.action).toBe("update");
+    expect(filterPreviewImportableNodes(input)[0]?.hash).toBe("legacy-uri-hash");
+  });
+
+  it("returns the legacy row hash for filtered deletion", () => {
+    const parsed = parseSubscription("trojan://secret@sg.example.com:443#SG-1", "source-1")[0]!;
+    const existing = [
+      {
+        ...parsed,
+        hash: "legacy-filter-hash",
+        raw: { name: "old", type: "trojan", uri: "trojan://secret@SG.EXAMPLE.com:443#old" }
+      }
+    ];
+    const input = {
+      source: { id: "source-1", name: "primary", kind: "url" as const, value: "https://example.com/sub" },
+      content: "trojan://secret@sg.example.com:443#SG-1",
+      existingNodes: existing,
+      excludeKeywords: ["SG"]
+    };
+
+    expect(filteredExistingNodeHashes(input)).toEqual(["legacy-filter-hash"]);
+  });
 });
