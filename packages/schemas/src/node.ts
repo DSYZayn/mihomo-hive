@@ -196,7 +196,7 @@ function parseUriIdentity(uri: string): Record<string, unknown> | undefined {
   if (!protocol) return undefined;
   if (protocol === "vmess") {
     try {
-      const data = JSON.parse(decodeBase64(value.slice("vmess://".length))) as Record<string, unknown>;
+      const data = JSON.parse(decodeBase64(value.slice("vmess://".length).split("#", 1)[0] ?? "")) as Record<string, unknown>;
       return omitNonIdentityProxyMetadata({
         type: "vmess",
         server: data.add,
@@ -221,7 +221,7 @@ function parseUriIdentity(uri: string): Record<string, unknown> | undefined {
   }
   if (protocol === "ssr") {
     try {
-      const decoded = decodeBase64(value.slice("ssr://".length));
+      const decoded = decodeBase64(value.slice("ssr://".length).split("#", 1)[0] ?? "");
       const [endpoint = "", query = ""] = decoded.split("/?", 2);
       const [server, port, ssrProtocol, method, obfs, encodedPassword] = endpoint.split(":");
       if (!server || !port || !ssrProtocol || !method || !obfs || !encodedPassword) return undefined;
@@ -249,7 +249,7 @@ function parseUriIdentity(uri: string): Record<string, unknown> | undefined {
   }
   try {
     const parsed = new URL(value);
-    const type = protocol === "socks" ? "socks5" : protocol === "hy2" ? "hysteria2" : protocol;
+    const type = normalizeProxyType(protocol);
     const result: Record<string, unknown> = { type, server: parsed.hostname };
     if (parsed.port) result.port = Number(parsed.port);
     const username = safeDecodeUri(parsed.username);
@@ -262,50 +262,87 @@ function parseUriIdentity(uri: string): Record<string, unknown> | undefined {
         result.cipher = methodAndPassword.slice(0, separator);
         result.password = methodAndPassword.slice(separator + 1);
       }
+      applyShadowsocksPluginIdentity(result, parsed.searchParams.get("plugin"));
+      return omitNonIdentityProxyMetadata(result) as Record<string, unknown>;
+    }
+    if (type === "trojan") {
+      result.password = username || password;
+      result.tls = true;
+      applyCommonTransportIdentity(result, parsed.searchParams);
     } else if (type === "vless") {
       result.uuid = username;
       result.encryption = parsed.searchParams.get("encryption") ?? "none";
-    } else if (type === "trojan") {
+      applyVlessTransportIdentity(result, parsed.searchParams);
+    } else if (type === "hysteria2") {
       result.password = username || password;
-    } else if (username) {
-      result.username = username;
-      if (password) result.password = password;
-    }
-    for (const [key, item] of parsed.searchParams.entries()) {
-      const normalized = normalizeProxyKey(key);
-      if (NON_IDENTITY_URI_QUERY_KEYS.has(normalized)) continue;
-      if (["sni", "peer", "servername", "server-name"].includes(normalized)) result.sni = item;
-      else if (normalized === "type" || normalized === "network") {
-        if (item !== "tcp") result.network = item;
-      } else if (normalized === "path") {
-        const wsOpts = (result["ws-opts"] as Record<string, unknown> | undefined) ?? {};
-        result["ws-opts"] = { ...wsOpts, path: item };
-      } else if (normalized === "host") {
-        const wsOpts = (result["ws-opts"] as Record<string, unknown> | undefined) ?? {};
-        const headers = (wsOpts.headers as Record<string, unknown> | undefined) ?? {};
-        result["ws-opts"] = { ...wsOpts, headers: { ...headers, Host: item } };
-      } else if (normalized === "security") {
-        result.security = item;
-        if (item === "tls" || item === "reality") result.tls = true;
-      } else if (normalized === "pbk" || normalized === "public-key") {
-        const realityOpts = (result["reality-opts"] as Record<string, unknown> | undefined) ?? {};
-        result["reality-opts"] = { ...realityOpts, "public-key": item };
-      } else if (normalized === "sid" || normalized === "short-id") {
-        const realityOpts = (result["reality-opts"] as Record<string, unknown> | undefined) ?? {};
-        result["reality-opts"] = { ...realityOpts, "short-id": item };
-      } else if (normalized === "fp" || normalized === "fingerprint") {
-        result["client-fingerprint"] = item;
-      } else if (normalized === "flow") {
-        result.flow = item;
-      } else if (normalized === "insecure" || normalized === "allow-insecure") {
-        result["skip-cert-verify"] = item === "1" || item === "true";
-      } else if (normalized !== "encryption") {
-        result[normalized] = item;
+      applyCommonTransportIdentity(result, parsed.searchParams);
+      const obfs = parsed.searchParams.get("obfs");
+      const obfsPassword = parsed.searchParams.get("obfs-password");
+      if (obfs) result.obfs = obfs;
+      if (obfsPassword) result["obfs-password"] = obfsPassword;
+    } else if (type === "tuic") {
+      const [uuid, inlinePassword] = username.split(":", 2);
+      result.uuid = uuid;
+      result.password = inlinePassword || password;
+      for (const key of ["congestion_control", "udp_relay_mode", "zero_rtt"]) {
+        const item = parsed.searchParams.get(key);
+        if (item) result[key.replaceAll("_", "-")] = item;
       }
+      applyCommonTransportIdentity(result, parsed.searchParams);
+    } else if (type === "socks5" || type === "http") {
+      if (username) result.username = username;
+      if (password) result.password = password;
+      applyCommonTransportIdentity(result, parsed.searchParams);
+    } else {
+      if (username) result.username = username;
+      if (password) result.password = password;
+      applyCommonTransportIdentity(result, parsed.searchParams);
+      result.uri = normalizeProxyUri(value);
     }
     return omitNonIdentityProxyMetadata(result) as Record<string, unknown>;
   } catch {
     return undefined;
+  }
+}
+
+function applyCommonTransportIdentity(result: Record<string, unknown>, params: URLSearchParams): void {
+  const sni = params.get("sni") ?? params.get("servername") ?? params.get("peer");
+  if (sni) result.sni = sni;
+  const insecure = params.get("insecure") ?? params.get("allow-insecure");
+  if (insecure) result["skip-cert-verify"] = insecure === "1" || insecure.toLowerCase() === "true";
+  const alpn = params.get("alpn");
+  if (alpn) result.alpn = alpn.split(",").map((item) => item.trim()).filter(Boolean);
+  const network = params.get("type") ?? params.get("network");
+  if (network && network !== "tcp") result.network = network;
+  const path = params.get("path");
+  const host = params.get("host");
+  if (path || host) {
+    result["ws-opts"] = {
+      ...(path ? { path } : {}),
+      ...(host ? { headers: { Host: host } } : {})
+    };
+  }
+}
+
+function applyVlessTransportIdentity(result: Record<string, unknown>, params: URLSearchParams): void {
+  const security = params.get("security");
+  if (security === "tls" || security === "reality") result.tls = true;
+  if (security === "reality") {
+    const publicKey = params.get("pbk");
+    const shortId = params.get("sid");
+    result["reality-opts"] = {
+      ...(publicKey ? { "public-key": publicKey } : {}),
+      ...(shortId ? { "short-id": shortId } : {})
+    };
+  }
+  const flow = params.get("flow");
+  if (flow) result.flow = flow;
+  const fingerprint = params.get("fp");
+  if (fingerprint) result["client-fingerprint"] = fingerprint;
+  applyCommonTransportIdentity(result, params);
+  if (result.network === "grpc") {
+    const serviceName = params.get("serviceName") ?? params.get("service-name");
+    if (serviceName) result["grpc-opts"] = { "grpc-service-name": serviceName };
   }
 }
 
@@ -333,24 +370,25 @@ function parseFullBase64ShadowsocksIdentity(value: string): Record<string, unkno
       password: credentials.slice(separator + 1)
     };
     if (queryIndex !== -1) {
-      const plugin = safeDecodeUri(body.slice(queryIndex + 1).replace(/^plugin=/, ""));
-      if (plugin) {
-        const [name, ...options] = plugin.split(";");
-        if (name) {
-          result.plugin = name;
-          const pluginOpts: Record<string, string> = {};
-          for (const option of options) {
-            const optionSeparator = option.indexOf("=");
-            if (optionSeparator > 0) pluginOpts[option.slice(0, optionSeparator)] = option.slice(optionSeparator + 1);
-          }
-          if (Object.keys(pluginOpts).length > 0) result["plugin-opts"] = pluginOpts;
-        }
-      }
+      applyShadowsocksPluginIdentity(result, body.slice(queryIndex + 1).replace(/^plugin=/, ""));
     }
     return omitNonIdentityProxyMetadata(result) as Record<string, unknown>;
   } catch {
     return undefined;
   }
+}
+
+function applyShadowsocksPluginIdentity(result: Record<string, unknown>, plugin: string | null): void {
+  if (!plugin) return;
+  const [name, ...options] = safeDecodeUri(plugin).split(";");
+  if (!name) return;
+  result.plugin = name;
+  const pluginOpts: Record<string, string> = {};
+  for (const option of options) {
+    const separator = option.indexOf("=");
+    if (separator > 0) pluginOpts[option.slice(0, separator)] = option.slice(separator + 1);
+  }
+  if (Object.keys(pluginOpts).length > 0) result["plugin-opts"] = pluginOpts;
 }
 
 function decodeBase64(value: string): string {

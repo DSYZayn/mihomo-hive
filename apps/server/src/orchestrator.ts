@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  buildSubscriptionImportPreview,
   createSub2ApiClient,
   filterPreviewImportableNodes,
   filteredExistingNodeHashes,
@@ -691,6 +692,12 @@ async function refreshSubscriptions(repo: HiveRepository): Promise<number> {
       const content = await repo.fetchSubscriptionContent(source);
       repo.updateSubscriptionContent(source.id, content);
       const existingNodes = repo.listNodes();
+      const preview = buildSubscriptionImportPreview({
+        source,
+        content,
+        existingNodes,
+        excludeKeywords: source.excludeKeywords
+      });
       const importable = filterPreviewImportableNodes({
         source,
         content,
@@ -711,7 +718,7 @@ async function refreshSubscriptions(repo: HiveRepository): Promise<number> {
       if (importable.length > 0) repo.upsertNodes(importable);
       refreshed += 1;
       console.log(
-        `subscription auto-refresh "${source.name}": imported ${importable.length}, deletedByFilter ${deleteHashes.length}`
+        `subscription auto-refresh "${source.name}": total ${preview.summary.total}, new ${preview.summary.importable - preview.summary.updates}, updated ${preview.summary.updates}, duplicateInSource ${preview.summary.duplicates}, existingOtherSource ${preview.summary.existing}, filtered ${preview.summary.filtered}, deletedByFilter ${deleteHashes.length}`
       );
     } catch (err) {
       console.warn(`subscription "${source.name}" refresh failed:`, err);

@@ -57,6 +57,23 @@ describe("HiveRepository node identity deduplication", () => {
     expect(repo.listNodes()).toHaveLength(1);
   });
 
+  it("merges a legacy Shadowsocks plugin URI with its expanded endpoint", () => {
+    const uri = "ss://YWVzLTI1Ni1nY206c2VjcmV0@sg.example.com:443?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dedge.example.com#old";
+    repo.upsertNodes([
+      node("legacy-ss-plugin", "SG-1", { type: "ss", uri }, 10001),
+      node("expanded-ss-plugin", "SG-1 Premium", {
+        type: "ss",
+        cipher: "aes-256-gcm",
+        plugin: "obfs-local",
+        "plugin-opts": { obfs: "http", "obfs-host": "edge.example.com" }
+      })
+    ]);
+
+    expect(repo.deduplicateNodesByIdentity()).toBe(1);
+    expect(repo.listNodes()).toHaveLength(1);
+    expect(repo.listNodes()[0]?.assignedPort).toBe(10001);
+  });
+
   it("merges a pre-normalization VMess row with its expanded endpoint", () => {
     const legacyRaw = {
       name: "JP 免费-日本3-Ver.7",

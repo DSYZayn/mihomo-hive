@@ -116,6 +116,64 @@ proxies:
     expect(filterPreviewImportableNodes(input)[0]?.hash).toBe("legacy-uri-hash");
   });
 
+  it("matches legacy Shadowsocks plugin URIs during an automatic refresh", () => {
+    const uri = "ss://YWVzLTI1Ni1nY206c2VjcmV0@sg.example.com:443?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dedge.example.com#SG-1";
+    const parsed = parseSubscription(uri, "source-1")[0]!;
+    const input = {
+      source: { id: "source-1", name: "primary", kind: "url" as const, value: "https://example.com/sub" },
+      content: uri,
+      existingNodes: [
+        {
+          ...parsed,
+          hash: "legacy-ss-plugin-hash",
+          raw: { name: "old", type: "ss", uri: uri.replace("#SG-1", "#old") }
+        }
+      ]
+    };
+
+    expect(buildSubscriptionImportPreview(input).items[0]?.action).toBe("update");
+    expect(filterPreviewImportableNodes(input)[0]?.hash).toBe("legacy-ss-plugin-hash");
+  });
+
+  it.each([
+    [
+      "Trojan transport options",
+      "trojan://secret@example.com:443?sni=edge.example.com&allow-insecure=1&alpn=h2,http/1.1&type=ws&path=%2Fws&host=edge.example.com#old"
+    ],
+    [
+      "VLESS gRPC options",
+      "vless://uuid@example.com:443?encryption=none&security=tls&sni=edge.example.com&type=grpc&serviceName=svc#old"
+    ],
+    [
+      "Hysteria2 credentials",
+      "hysteria2://secret@example.com:443?sni=edge.example.com&insecure=1&obfs=salamander&obfs-password=obfs-secret#old"
+    ],
+    [
+      "TUIC credentials",
+      "tuic://uuid:secret@example.com:443?sni=edge.example.com&congestion_control=bbr&udp_relay_mode=native&zero_rtt=true#old"
+    ],
+    [
+      "SSR fragments",
+      `ssr://${Buffer.from(`example.com:443:origin:aes-128-gcm:plain:${Buffer.from("secret").toString("base64url")}/?`).toString("base64url")}#old`
+    ]
+  ])("matches legacy %s URI rows with the current expanded parser", (_, uri) => {
+    const parsed = parseSubscription(uri, "source-1")[0]!;
+    const input = {
+      source: { id: "source-1", name: "primary", kind: "url" as const, value: "https://example.com/sub" },
+      content: uri,
+      existingNodes: [
+        {
+          ...parsed,
+          hash: "legacy-expanded-uri-hash",
+          raw: { name: "old", type: uri.slice(0, uri.indexOf(":")), uri }
+        }
+      ]
+    };
+
+    expect(buildSubscriptionImportPreview(input).items[0]?.action).toBe("update");
+    expect(filterPreviewImportableNodes(input)[0]?.hash).toBe("legacy-expanded-uri-hash");
+  });
+
   it("returns the legacy row hash for filtered deletion", () => {
     const parsed = parseSubscription("trojan://secret@sg.example.com:443#SG-1", "source-1")[0]!;
     const existing = [
