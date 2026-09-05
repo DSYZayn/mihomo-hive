@@ -45,12 +45,44 @@ export function canonicalProxyIdentity(raw: Record<string, unknown>): unknown {
       targetNodeHash: String(metadata.targetNodeHash ?? "")
     };
   }
+  const legacyVmess = parseLegacyVmessIdentity(raw);
+  if (legacyVmess) return applyIdentityDefaults(legacyVmess);
   if (typeof raw.uri === "string") {
     const parsed = parseUriIdentity(raw.uri);
     if (parsed) return applyIdentityDefaults(parsed);
     return { type: String(raw.type ?? "unknown").toLowerCase(), uri: normalizeProxyUri(raw.uri) };
   }
   return applyIdentityDefaults(omitNonIdentityProxyMetadata(raw) as Record<string, unknown>);
+}
+
+/** Normalize the VMess shape persisted by versions before the URI parser rewrite. */
+function parseLegacyVmessIdentity(raw: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (normalizeProxyType(String(raw.type ?? "")) !== "vmess") return undefined;
+  if (!raw.rawVmess || typeof raw.rawVmess !== "object" || Array.isArray(raw.rawVmess)) return undefined;
+
+  const data = raw.rawVmess as Record<string, unknown>;
+  const server = typeof data.add === "string" ? data.add : undefined;
+  const port = Number(data.port);
+  const uuid = typeof data.id === "string" ? data.id : undefined;
+  if (!server || !Number.isInteger(port) || port <= 0 || !uuid) return undefined;
+
+  const result: Record<string, unknown> = {
+    type: "vmess",
+    server,
+    port,
+    uuid,
+    "alter-id": Number(data.aid ?? 0),
+    cipher: data.scy ?? "auto",
+    tls: data.tls === true || data.tls === "tls"
+  };
+  if (typeof data.net === "string" && data.net) result.network = data.net;
+  if (typeof data.host === "string" || typeof data.path === "string") {
+    result["ws-opts"] = {
+      ...(typeof data.path === "string" ? { path: data.path } : {}),
+      ...(typeof data.host === "string" ? { headers: { Host: data.host } } : {})
+    };
+  }
+  return omitNonIdentityProxyMetadata(result) as Record<string, unknown>;
 }
 
 function normalizeProxyUri(uri: string): string {

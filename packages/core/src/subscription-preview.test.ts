@@ -134,4 +134,49 @@ proxies:
 
     expect(filteredExistingNodeHashes(input)).toEqual(["legacy-filter-hash"]);
   });
+
+  it("matches pre-normalization VMess rows during an automatic refresh", () => {
+    const vmessData = {
+      v: "2",
+      ps: "JP 免费-日本3-Ver.7",
+      add: "jp.example.com",
+      port: 443,
+      id: "vmess-user",
+      aid: 0,
+      scy: "auto",
+      net: "ws",
+      tls: "tls",
+      host: "edge.example.com",
+      path: "/chat"
+    };
+    const refreshed = parseSubscription(`vmess://${Buffer.from(JSON.stringify(vmessData)).toString("base64")}`, "source-1")[0]!;
+    const existing = [
+      {
+        ...refreshed,
+        hash: "legacy-vmess-hash",
+        raw: {
+          name: vmessData.ps,
+          type: "vmess",
+          server: vmessData.add,
+          port: vmessData.port,
+          uuid: vmessData.id,
+          alterId: vmessData.aid,
+          cipher: vmessData.scy,
+          tls: true,
+          network: vmessData.net,
+          rawVmess: vmessData
+        }
+      }
+    ];
+    const input = {
+      source: { id: "source-1", name: "primary", kind: "url" as const, value: "https://example.com/sub" },
+      content: `vmess://${Buffer.from(JSON.stringify({ ...vmessData, ps: "JP 免费-日本3-Ver.7" })).toString("base64")}`,
+      existingNodes: existing
+    } as const;
+
+    const preview = buildSubscriptionImportPreview(input);
+
+    expect(preview.items[0]?.action).toBe("update");
+    expect(filterPreviewImportableNodes(input)[0]?.hash).toBe("legacy-vmess-hash");
+  });
 });

@@ -56,6 +56,54 @@ describe("HiveRepository node identity deduplication", () => {
     expect(repo.deduplicateNodesByIdentity()).toBe(1);
     expect(repo.listNodes()).toHaveLength(1);
   });
+
+  it("merges a pre-normalization VMess row with its expanded endpoint", () => {
+    const legacyRaw = {
+      name: "JP 免费-日本3-Ver.7",
+      type: "vmess",
+      server: "jp.example.com",
+      port: 443,
+      uuid: "vmess-user",
+      alterId: 0,
+      cipher: "auto",
+      tls: true,
+      network: "ws",
+      rawVmess: {
+        v: "2",
+        ps: "JP 免费-日本3-Ver.7",
+        add: "jp.example.com",
+        port: 443,
+        id: "vmess-user",
+        aid: 0,
+        scy: "auto",
+        net: "ws",
+        tls: "tls",
+        host: "edge.example.com",
+        path: "/chat"
+      },
+      "ws-opts": { path: "/chat", headers: { Host: "edge.example.com" } }
+    };
+    const expandedRaw = {
+      name: "JP 免费-日本3-Ver.7",
+      type: "vmess",
+      server: "jp.example.com",
+      port: 443,
+      uuid: "vmess-user",
+      alterId: 0,
+      cipher: "auto",
+      tls: true,
+      network: "ws",
+      "ws-opts": { path: "/chat", headers: { Host: "edge.example.com" } }
+    };
+    repo.upsertNodes([
+      node("legacy-vmess-hash", "JP 免费-日本3-Ver.7", { ...legacyRaw, password: undefined }, 10001),
+      node("expanded-vmess-hash", "JP 免费-日本3-Ver.7", { ...expandedRaw, password: undefined })
+    ]);
+
+    expect(repo.deduplicateNodesByIdentity()).toBe(1);
+    expect(repo.listNodes()).toHaveLength(1);
+    expect(repo.listNodes()[0]?.assignedPort).toBe(10001);
+  });
 });
 
 function node(hash: string, name: string, options: Record<string, unknown>, assignedPort?: number): ProxyNode {
