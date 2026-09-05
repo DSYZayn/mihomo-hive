@@ -234,6 +234,159 @@ describe("renderMihomoConfig", () => {
     });
     expect(chainProxy).not.toHaveProperty("uri");
   });
+
+  it("normalizes legacy VMess alterId before applying dialer-proxy", () => {
+    const front: ProxyNode = {
+      hash: "frontvmessabcdef",
+      sourceId: "sample",
+      name: "front",
+      originalName: "front",
+      type: "ss",
+      region: "unknown",
+      raw: { type: "ss", server: "front.example.com", port: 443, cipher: "aes-128-gcm", password: "front" },
+      status: "active",
+      lifecycleStatus: "schedulable",
+      schedulable: true,
+      protected: false,
+      assignedPort: 10001,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    const target: ProxyNode = {
+      ...front,
+      hash: "targetvmessabcdef",
+      name: "target",
+      originalName: "target",
+      type: "vmess",
+      raw: {
+        type: "vmess",
+        server: "target.example.com",
+        port: 443,
+        uuid: "target-uuid",
+        alterId: 0,
+        cipher: "auto",
+        tls: true,
+        network: "ws",
+        "ws-opts": { path: "/chat", headers: { Host: "target.example.com" } }
+      },
+      assignedPort: undefined
+    };
+    const chain: ProxyNode = {
+      ...front,
+      hash: "chainvmessabcdef",
+      name: "front -> target",
+      originalName: "front -> target",
+      kind: "chain",
+      chain: { frontNodeHash: front.hash, targetNodeHash: target.hash, frontNodeName: front.name, targetNodeName: target.name },
+      raw: {
+        type: "vmess",
+        server: "stale.example.com",
+        port: 443,
+        uuid: "stale-uuid",
+        alterId: 1
+      },
+      assignedPort: 10002
+    };
+
+    const document = parse(renderMihomoConfig([front, target, chain], defaultRuntimeConfig).yaml) as {
+      proxies: Array<Record<string, unknown>>;
+    };
+    const chainProxy = document.proxies.find((proxy) => proxy.name === proxyNameForNode(chain));
+    expect(chainProxy).toMatchObject({
+      type: "vmess",
+      server: "target.example.com",
+      "alter-id": 0,
+      "dialer-proxy": proxyNameForNode(front)
+    });
+    expect(chainProxy).not.toHaveProperty("alterId");
+  });
+
+  it("preserves arbitrary Mihomo proxy fields when building a chain", () => {
+    const front: ProxyNode = {
+      hash: "frontcustomabcdef",
+      sourceId: "sample",
+      name: "front",
+      originalName: "front",
+      type: "ss",
+      region: "unknown",
+      raw: { type: "ss", server: "front.example.com", port: 443, cipher: "aes-128-gcm", password: "front" },
+      status: "active",
+      lifecycleStatus: "schedulable",
+      schedulable: true,
+      protected: false,
+      assignedPort: 10001,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+    const target: ProxyNode = {
+      ...front,
+      hash: "targetcustomabcdef",
+      name: "custom",
+      originalName: "custom",
+      type: "wireguard",
+      raw: {
+        type: "wireguard",
+        server: "custom.example.com",
+        port: 443,
+        "private-key": "private-key",
+        "public-key": "public-key",
+        reserved: "protocol-specific-value"
+      } as unknown as Record<string, unknown>
+    };
+    const chain: ProxyNode = {
+      ...front,
+      hash: "chaincustomabcdef",
+      name: "front -> custom",
+      originalName: "front -> custom",
+      kind: "chain",
+      chain: { frontNodeHash: front.hash, targetNodeHash: target.hash, frontNodeName: front.name, targetNodeName: target.name },
+      raw: { type: "wireguard", server: "stale.example.com", port: 443 },
+      assignedPort: 10002
+    };
+
+    const document = parse(renderMihomoConfig([front, target, chain], defaultRuntimeConfig).yaml) as {
+      proxies: Array<Record<string, unknown>>;
+    };
+    const chainProxy = document.proxies.find((proxy) => proxy.name === proxyNameForNode(chain));
+    expect(chainProxy).toMatchObject({
+      type: "wireguard",
+      server: "custom.example.com",
+      "private-key": "private-key",
+      "public-key": "public-key",
+      reserved: "protocol-specific-value",
+      "dialer-proxy": proxyNameForNode(front)
+    });
+  });
+
+  it("fails clearly for an URI-only protocol that Hive cannot expand", () => {
+    const node: ProxyNode = {
+      hash: "unknownuriabcdef",
+      sourceId: "sample",
+      name: "unknown-uri",
+      originalName: "unknown-uri",
+      type: "unknown",
+      region: "unknown",
+      raw: { type: "unknown", uri: "unknown://secret@example.com:443" },
+      status: "active",
+      lifecycleStatus: "candidate",
+      schedulable: false,
+      protected: false,
+      assignedPort: 10001,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+
+    expect(() => renderMihomoConfig([node], defaultRuntimeConfig)).toThrow("URI 协议未被 Hive 解析");
+  });
 });
 
 describe("renderMihomoConfig codex-egress (外置 agent)", () => {

@@ -4,6 +4,7 @@ import {
   createSub2ApiClient,
   filterPreviewImportableNodes,
   filteredExistingNodeHashes,
+  localProbeHost,
   mapLocalNodesToSub2ApiProxies,
   mapWithConcurrency,
   measureProxyTcpLatency,
@@ -472,12 +473,6 @@ async function runActiveProbeRound(
       localListenerDown: false
     });
   });
-}
-
-function localProbeHost(listenHost: string): string {
-  if (listenHost === "0.0.0.0") return "127.0.0.1";
-  if (listenHost === "::" || listenHost === "[::]") return "::1";
-  return listenHost;
 }
 
 /** prober 的全局调度：fire-and-forget；进程退出自然停止。 */

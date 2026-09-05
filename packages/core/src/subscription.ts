@@ -110,7 +110,7 @@ function parseVmess(uri: string, index: number): RawProxy {
       server,
       port,
       uuid,
-      alterId: Number(data.aid ?? 0),
+      "alter-id": Number(data.aid ?? 0),
       cipher: data.scy ?? "auto",
       tls: data.tls === "tls"
     };

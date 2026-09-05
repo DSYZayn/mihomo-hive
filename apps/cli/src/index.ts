@@ -11,6 +11,7 @@ import {
   filterPreviewImportableNodes,
   hashPassword,
   loadRuntimeConfig,
+  localProbeHost,
   mapWithConcurrency,
   measureProxyTcpLatency,
   parsePortRange,
@@ -183,7 +184,7 @@ nodes
         .map((item) => item.trim())
         .filter(Boolean)
     );
-    const host = options.host ?? config.listenHost;
+    const host = localProbeHost(options.host ?? config.listenHost);
     const candidates = repo.listNodes().filter((node) => node.assignedPort);
     const tested = await mapWithConcurrency(candidates, options.concurrency, async (node) => {
       // 普通节点测直连 L1；链式节点的所有健康信号都来自下面经 listener

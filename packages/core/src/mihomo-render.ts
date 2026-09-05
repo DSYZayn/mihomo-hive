@@ -144,9 +144,20 @@ export function proxyNameForNode(node: Pick<ProxyNode, "hash" | "assignedPort">)
 
 function renderableProxyRaw(raw: Record<string, unknown>): Record<string, unknown> {
   const clean = Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "__hiveChain"));
+  // Older imports persisted VMess's Clash-style camelCase key. Mihomo expects
+  // the canonical YAML spelling, so repair it when rendering existing rows.
+  if (clean["alter-id"] === undefined && clean.alterId !== undefined) {
+    clean["alter-id"] = clean.alterId;
+  }
+  delete clean.alterId;
   if (typeof clean.uri === "string" && (typeof clean.server !== "string" || typeof clean.port !== "number")) {
     const expanded = parseProxyUri(clean.uri, typeof clean.name === "string" ? clean.name : "proxy");
-    if (expanded) return Object.fromEntries(Object.entries(expanded).filter(([key]) => key !== "uri" && key !== "__hiveChain"));
+    if (expanded && typeof expanded.server === "string" && typeof expanded.port === "number" && expanded.uri === undefined) {
+      return Object.fromEntries(Object.entries(expanded).filter(([key]) => key !== "uri" && key !== "__hiveChain"));
+    }
+    throw new Error(
+      `无法渲染节点 "${String(clean.name ?? "proxy")}"：URI 协议未被 Hive 解析，请改用 Clash/Mihomo YAML 节点格式。`
+    );
   }
   if (typeof clean.server === "string" && typeof clean.port === "number") delete clean.uri;
   return clean;

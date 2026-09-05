@@ -22,6 +22,7 @@ import {
   planStrategySwitch,
   validateIntakeAgainstSpec,
   mapWithConcurrency,
+  localProbeHost,
   parsePortRange,
   planSub2ApiAssignments,
   planSub2ApiManagedMaintenance,
@@ -641,7 +642,7 @@ export const appRouter = t.router({
       )
       .mutation(async ({ ctx, input }) => {
         const targets = resolveProxyTestTargets(input.targets);
-        const host = input.host ?? ctx.config.listenHost;
+        const host = localProbeHost(input.host ?? ctx.config.listenHost);
         const spec = ctx.repo.getOrchestrationSpec();
         const inPoolGate = spec.supply.inPoolGate;
         const hashFilter = input.hashes ? new Set(input.hashes) : undefined;

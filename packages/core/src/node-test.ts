@@ -81,6 +81,12 @@ export const defaultProxyTestTargets: Record<string, ProxyTestTarget> = {
   }
 };
 
+export function localProbeHost(listenHost: string): string {
+  if (listenHost === "0.0.0.0") return "127.0.0.1";
+  if (listenHost === "::" || listenHost === "[::]") return "::1";
+  return listenHost;
+}
+
 export function resolveProxyTestTargets(ids: string[]): ProxyTestTarget[] {
   return ids.map((id) => {
     const target = defaultProxyTestTargets[id];
