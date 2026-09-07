@@ -24,7 +24,7 @@ import {
 } from "@mihomo-hive/core";
 import { openSqlite, HiveRepository } from "@mihomo-hive/db";
 import { exportSub2Api } from "@mihomo-hive/exporters";
-import { readMihomoStatus, reloadMihomo, startMihomo, stopMihomo } from "@mihomo-hive/mihomo";
+import { readMihomoStatus, reloadMihomo, startMihomo, stopMihomo, writeMihomoConfig } from "@mihomo-hive/mihomo";
 import { defaultRuntimeConfig, parseRuntimeConfig, sub2ApiAccountFiltersSchema, sub2ApiProtectedProxyRuleSchema } from "@mihomo-hive/schemas";
 import type { Sub2ApiAssignmentOptions, SubscriptionSource } from "@mihomo-hive/schemas";
 
@@ -321,8 +321,11 @@ mihomo
   .action(async () => {
     const { config, repo } = await openRepo();
     const rendered = renderMihomoConfig(repo.listNodes(), config);
-    await writeGenerated(config.mihomoConfigPath, rendered.yaml);
+    await writeMihomoConfig(config, rendered.yaml);
     await writeGenerated(`${config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
+    if (rendered.skippedNodes.length > 0) {
+      console.warn(`Skipped ${rendered.skippedNodes.length} node(s) that Mihomo Hive could not expand.`);
+    }
     console.log(`Rendered ${rendered.egressMap.length} listeners to ${config.mihomoConfigPath}`);
   });
 

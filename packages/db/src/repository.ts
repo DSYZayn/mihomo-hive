@@ -323,6 +323,25 @@ export class HiveRepository {
   }
 
   upsertNodes(nodes: ProxyNode[]): void {
+    // The primary key is a historical implementation detail: older imports
+    // used a different hash for the same connection. Resolve identities before
+    // SQLite sees the batch so a refresh cannot create a second row first.
+    const existingByIdentity = new Map<string, ProxyNode>();
+    for (const existing of this.listNodes()) {
+      const identity = identityHash(existing.raw);
+      const current = existingByIdentity.get(identity);
+      if (!current || nodeKeepScore(existing) > nodeKeepScore(current)) {
+        existingByIdentity.set(identity, existing);
+      }
+    }
+    const batchHashByIdentity = new Map<string, string>();
+    const normalizedNodes = nodes.map((node) => {
+      const identity = identityHash(node.raw);
+      const hash = existingByIdentity.get(identity)?.hash ?? batchHashByIdentity.get(identity) ?? node.hash;
+      batchHashByIdentity.set(identity, hash);
+      return hash === node.hash ? node : { ...node, hash };
+    });
+
     const statement = this.sqlite.prepare(`
       INSERT INTO nodes (
         hash, source_id, name, original_name, type, region, raw_json, kind, chain_json, status,
@@ -386,7 +405,7 @@ export class HiveRepository {
       }
     });
 
-    transaction(nodes);
+    transaction(normalizedNodes);
   }
 
   /**

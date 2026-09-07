@@ -18,7 +18,7 @@ import {
 } from "@mihomo-hive/core";
 import { openSqlite, HiveRepository } from "@mihomo-hive/db";
 import { exportSub2Api } from "@mihomo-hive/exporters";
-import { readMihomoStatus, reloadMihomo, startMihomo } from "@mihomo-hive/mihomo";
+import { readMihomoStatus, reloadMihomo, startMihomo, writeMihomoConfig } from "@mihomo-hive/mihomo";
 import { sub2ApiExportRequestSchema } from "@mihomo-hive/schemas";
 import { existsSync } from "node:fs";
 import { codexEgressRenderOpts } from "./codex-egress.js";
@@ -116,9 +116,9 @@ app.post("/api/mihomo/render", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
   const rendered = renderMihomoConfig(repo.listNodes(), config, codexEgressRenderOpts(repo));
-  await writeGenerated(config.mihomoConfigPath, rendered.yaml);
+  await writeMihomoConfig(config, rendered.yaml);
   await writeGenerated(`${config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
-  return c.json({ listeners: rendered.egressMap.length });
+  return c.json({ listeners: rendered.egressMap.length, skippedNodes: rendered.skippedNodes });
 });
 
 // 精简后台维护器：只做订阅刷新、节点验活和 Sub2API 代理幂等同步。
@@ -162,7 +162,7 @@ async function autoBootMihomo(): Promise<void> {
   // 尤其是外置 agent 的 codex-egress 唯一出口口(否则沿用旧配置,改了 spec 也不生效)。
   try {
     const rendered = renderMihomoConfig(repo.listNodes(), config, codexEgressRenderOpts(repo));
-    await writeGenerated(config.mihomoConfigPath, rendered.yaml);
+    await writeMihomoConfig(config, rendered.yaml);
     await writeGenerated(`${config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
     console.log(`Mihomo config rendered on boot (${rendered.egressMap.length} listeners).`);
   } catch (error) {

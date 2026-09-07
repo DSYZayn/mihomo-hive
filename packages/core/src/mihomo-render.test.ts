@@ -235,7 +235,7 @@ describe("renderMihomoConfig", () => {
     expect(chainProxy).not.toHaveProperty("uri");
   });
 
-  it("normalizes legacy VMess alterId before applying dialer-proxy", () => {
+  it("normalizes legacy VMess alter-id before applying dialer-proxy", () => {
     const front: ProxyNode = {
       hash: "frontvmessabcdef",
       sourceId: "sample",
@@ -298,10 +298,10 @@ describe("renderMihomoConfig", () => {
     expect(chainProxy).toMatchObject({
       type: "vmess",
       server: "target.example.com",
-      "alter-id": 0,
+      alterId: 0,
       "dialer-proxy": proxyNameForNode(front)
     });
-    expect(chainProxy).not.toHaveProperty("alterId");
+    expect(chainProxy).not.toHaveProperty("alter-id");
   });
 
   it("preserves arbitrary Mihomo proxy fields when building a chain", () => {
@@ -364,7 +364,7 @@ describe("renderMihomoConfig", () => {
     });
   });
 
-  it("fails clearly for an URI-only protocol that Hive cannot expand", () => {
+  it("skips an URI-only protocol that Hive cannot expand", () => {
     const node: ProxyNode = {
       hash: "unknownuriabcdef",
       sourceId: "sample",
@@ -385,7 +385,10 @@ describe("renderMihomoConfig", () => {
       updatedAt: "2026-01-01T00:00:00.000Z"
     };
 
-    expect(() => renderMihomoConfig([node], defaultRuntimeConfig)).toThrow("URI 协议未被 Hive 解析");
+    const rendered = renderMihomoConfig([node], defaultRuntimeConfig);
+    expect(rendered.egressMap).toEqual([]);
+    expect(rendered.skippedNodes).toMatchObject([{ nodeHash: node.hash, nodeName: node.name }]);
+    expect(rendered.skippedNodes[0]?.reason).toContain("URI 协议未被 Hive 解析");
   });
 });
 

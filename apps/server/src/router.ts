@@ -32,7 +32,7 @@ import {
   testProxyTarget
 } from "@mihomo-hive/core";
 import { exportSub2Api, previewSub2ApiExport } from "@mihomo-hive/exporters";
-import { readMihomoStatus, reloadMihomo, startMihomo, stopMihomo } from "@mihomo-hive/mihomo";
+import { applyMihomoConfig, readMihomoStatus, reloadMihomo, startMihomo, stopMihomo, writeMihomoConfig } from "@mihomo-hive/mihomo";
 import {
   accountFleetSpecSchema,
   accountFleetStatusSnapshotSchema,
@@ -135,16 +135,14 @@ export const appRouter = t.router({
         updateJobStep(job.id, 0, "running", "正在渲染 Mihomo 配置。");
         const nodes = ctx.repo.listNodes();
         const rendered = renderMihomoConfig(nodes, ctx.config, codexEgressRenderOpts(ctx.repo));
-        await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+        const status = await applyMihomoConfig(ctx.config, rendered.yaml);
         await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
-        updateJobStep(job.id, 0, "success", `生成 ${rendered.egressMap.length} 个 listener。`);
+        updateJobStep(job.id, 0, "success", `生成 ${rendered.egressMap.length} 个 listener${rendered.skippedNodes.length > 0 ? `，跳过 ${rendered.skippedNodes.length} 个无法展开的节点` : ""}。`);
 
         updateJobStep(job.id, 1, "running", "正在启动或重载 Mihomo。");
-        const current = await readMihomoStatus(ctx.config);
-        const status = current.running ? await reloadMihomo(ctx.config) : await startMihomo(ctx.config);
         updateJobStep(job.id, 1, "success", status.running ? "Mihomo 已运行。" : "未确认 Mihomo 运行状态。");
         finishJob(job.id, "success", "重建完成。");
-        return { job: operationJobs.get(job.id), listeners: rendered.egressMap.length, status };
+        return { job: operationJobs.get(job.id), listeners: rendered.egressMap.length, skippedNodes: rendered.skippedNodes, status };
       } catch (error) {
         finishJob(job.id, "failed", error instanceof Error ? error.message : "未知错误");
         throw error;
@@ -286,13 +284,13 @@ export const appRouter = t.router({
         }
         ctx.repo.upsertNodes([created]);
         const rendered = renderMihomoConfig(ctx.repo.listNodes(), ctx.config, codexEgressRenderOpts(ctx.repo));
-        await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+        const newStatus = await applyMihomoConfig(ctx.config, rendered.yaml);
         await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
-        const newStatus = status.running ? await reloadMihomo(ctx.config) : await startMihomo(ctx.config);
         return {
           created: true,
           node: ctx.repo.listNodes().find((candidate) => candidate.hash === node.hash),
           listeners: rendered.egressMap.length,
+          skippedNodes: rendered.skippedNodes,
           status: newStatus
         };
       }),
@@ -599,15 +597,15 @@ export const appRouter = t.router({
 
           updateJobStep(job.id, 1, "running", "正在渲染并 reload Mihomo。");
           const rendered = renderMihomoConfig(assigned, ctx.config, codexEgressRenderOpts(ctx.repo));
-          await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+          const newStatus = await applyMihomoConfig(ctx.config, rendered.yaml);
           await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
-          const newStatus = status.running ? await reloadMihomo(ctx.config) : await startMihomo(ctx.config);
           updateJobStep(job.id, 1, "success", newStatus.running ? "Mihomo 已运行。" : "Mihomo 未运行。");
           finishJob(job.id, "success", `接入完成，共 ${rendered.egressMap.length} 个 listener。`);
           return {
             job: operationJobs.get(job.id),
             assigned: newlyAssigned,
             listeners: rendered.egressMap.length,
+            skippedNodes: rendered.skippedNodes,
             status: newStatus
           };
         } catch (error) {
@@ -667,9 +665,8 @@ export const appRouter = t.router({
             });
             ctx.repo.saveNodes(assigned);
             const rendered = renderMihomoConfig(assigned, ctx.config, codexEgressRenderOpts(ctx.repo));
-            await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+            await applyMihomoConfig(ctx.config, rendered.yaml);
             await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
-            await (status.running ? reloadMihomo(ctx.config) : startMihomo(ctx.config));
           }
         }
         const candidates = ctx.repo
@@ -751,9 +748,9 @@ export const appRouter = t.router({
   mihomo: t.router({
     render: protectedProcedure.mutation(async ({ ctx }) => {
       const rendered = renderMihomoConfig(ctx.repo.listNodes(), ctx.config, codexEgressRenderOpts(ctx.repo));
-      await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+      await writeMihomoConfig(ctx.config, rendered.yaml);
       await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
-      return { listeners: rendered.egressMap.length };
+      return { listeners: rendered.egressMap.length, skippedNodes: rendered.skippedNodes };
     }),
     start: protectedProcedure.mutation(({ ctx }) => startMihomo(ctx.config)),
     stop: protectedProcedure.mutation(({ ctx }) => stopMihomo(ctx.config)),
@@ -1303,7 +1300,7 @@ export const appRouter = t.router({
           // best-effort 重渲染 + reload,失败不阻塞保存。
           try {
             const rendered = renderMihomoConfig(ctx.repo.listNodes(), ctx.config, codexEgressRenderOpts(ctx.repo));
-            await writeGenerated(ctx.config.mihomoConfigPath, rendered.yaml);
+            await writeMihomoConfig(ctx.config, rendered.yaml);
             await writeGenerated(`${ctx.config.generatedDir}/egress-map.json`, JSON.stringify(rendered.egressMap, null, 2));
             const status = await readMihomoStatus(ctx.config);
             if (status.running) await reloadMihomo(ctx.config);

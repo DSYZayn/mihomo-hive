@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { RuntimeConfig } from "@mihomo-hive/schemas";
@@ -7,6 +8,73 @@ import type { RuntimeConfig } from "@mihomo-hive/schemas";
 export interface MihomoStatus {
   running: boolean;
   pid?: number;
+}
+
+/**
+ * Validate a generated config with Mihomo before replacing the live file.
+ * Mihomo's own parser is the source of truth for protocol-specific fields.
+ */
+export async function writeMihomoConfig(config: RuntimeConfig, content: string): Promise<void> {
+  await mkdir(dirname(config.mihomoConfigPath), { recursive: true });
+  await mkdir(config.dataDir, { recursive: true });
+  const temporaryPath = `${config.mihomoConfigPath}.tmp-${process.pid}-${randomUUID()}.yaml`;
+  try {
+    await writeFile(temporaryPath, content, "utf8");
+    await validateMihomoConfig(config, temporaryPath);
+    await rename(temporaryPath, config.mihomoConfigPath);
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+/** Write a validated config, then reload or start the current Mihomo process. */
+export async function applyMihomoConfig(config: RuntimeConfig, content: string): Promise<MihomoStatus> {
+  await writeMihomoConfig(config, content);
+  const status = await readMihomoStatus(config);
+  return status.running ? reloadMihomo(config) : startMihomo(config);
+}
+
+async function validateMihomoConfig(config: RuntimeConfig, configPath: string): Promise<void> {
+  let result: { code: number | null; signal: NodeJS.Signals | null; output: string };
+  try {
+    result = await runMihomo(config.mihomoBin, ["-t", "-d", config.dataDir, "-f", configPath]);
+  } catch (error) {
+    throw new Error(
+      `无法执行 Mihomo 配置校验：${error instanceof Error ? error.message : String(error)}。旧配置未修改。`
+    );
+  }
+  if (result.code === 0) return;
+  const detail = result.output.trim().slice(-4000);
+  throw new Error(
+    `Mihomo 配置校验失败${result.code === null ? `（信号 ${result.signal ?? "unknown"}）` : `（退出码 ${result.code}）`}。` +
+      (detail ? `\n${detail}` : "") +
+      "\n旧配置未修改。"
+  );
+}
+
+function runMihomo(
+  command: string,
+  args: string[]
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string }> {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    let output = "";
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      output += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      output += chunk.toString();
+    });
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal, output }));
+  });
 }
 
 /** external-controller 地址规范成 http base（配置可能是 "127.0.0.1:9090" 或带 scheme）。 */

@@ -198,6 +198,8 @@ proxies:
     )[0];
 
     expect(fromUri?.hash).toBe(fromYaml?.hash);
+    expect(fromUri?.raw).toMatchObject({ alterId: 0 });
+    expect(fromUri?.raw).not.toHaveProperty("alter-id");
   });
 
   it("normalizes SSR URI credentials to the same identity as Clash YAML", () => {

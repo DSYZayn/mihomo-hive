@@ -11,6 +11,11 @@ export interface RenderedMihomo {
     listenHost: string;
     port: number;
   }>;
+  skippedNodes: Array<{
+    nodeHash: string;
+    nodeName: string;
+    reason: string;
+  }>;
 }
 
 /**
@@ -62,19 +67,42 @@ export function renderMihomoConfig(
     })
     .sort((a, b) => Number(a.assignedPort) - Number(b.assignedPort));
 
-  const proxies = activeNodes.map((node) => {
-    const target = node.chain ? nodes.find((candidate) => candidate.hash === node.chain?.targetNodeHash) : undefined;
-    // 链式记录只保存节点关系；每次都从最后出口的当前定义渲染，避免订阅刷新后
-    // 仍使用旧凭据或旧传输参数。
-    const raw = renderableProxyRaw(node.kind === "chain" && target ? target.raw : node.raw);
-    const front = node.chain ? nodes.find((candidate) => candidate.hash === node.chain?.frontNodeHash) : undefined;
-    if (node.kind === "chain" && front?.assignedPort) {
-      raw["dialer-proxy"] = proxyNameForNode(front);
-    }
-    return { ...raw, name: proxyNameForNode(node) };
-  });
+  const skippedNodes: RenderedMihomo["skippedNodes"] = [];
+  const renderedEntries = new Map<string, { node: ProxyNode; raw: Record<string, unknown> }>();
 
-  const listeners = activeNodes.map((node) => ({
+  // Render direct nodes first so a chain can verify that its front proxy is
+  // present before Mihomo receives a reference to it.
+  const renderOrder = [
+    ...activeNodes.filter((node) => node.kind !== "chain"),
+    ...activeNodes.filter((node) => node.kind === "chain")
+  ];
+  for (const node of renderOrder) {
+    const target = node.chain ? nodes.find((candidate) => candidate.hash === node.chain?.targetNodeHash) : undefined;
+    const front = node.chain ? nodes.find((candidate) => candidate.hash === node.chain?.frontNodeHash) : undefined;
+    try {
+      if (node.kind === "chain" && (!front || !front.assignedPort || !renderedEntries.has(front.hash))) {
+        throw new Error("链式节点的前置代理未能渲染");
+      }
+      // 链式记录只保存节点关系；每次都从最后出口的当前定义渲染，避免订阅刷新后
+      // 仍使用旧凭据或旧传输参数。
+      const raw = renderableProxyRaw(node.kind === "chain" && target ? target.raw : node.raw);
+      if (node.kind === "chain" && front?.assignedPort) {
+        raw["dialer-proxy"] = proxyNameForNode(front);
+      }
+      renderedEntries.set(node.hash, { node, raw: { ...raw, name: proxyNameForNode(node) } });
+    } catch (error) {
+      skippedNodes.push({
+        nodeHash: node.hash,
+        nodeName: node.name,
+        reason: error instanceof Error ? error.message : "节点配置无法展开"
+      });
+    }
+  }
+
+  const renderedNodes = activeNodes.filter((node) => renderedEntries.has(node.hash));
+  const proxies = renderedNodes.map((node) => renderedEntries.get(node.hash)!.raw);
+
+  const listeners = renderedNodes.map((node) => ({
     name: `hive-${node.assignedPort}`,
     type: "mixed",
     listen: config.listenHost,
@@ -123,13 +151,14 @@ export function renderMihomoConfig(
 
   return {
     yaml: stringify(document, { lineWidth: 0 }),
-    egressMap: activeNodes.map((node) => ({
+    egressMap: renderedNodes.map((node) => ({
       nodeHash: node.hash,
       nodeName: node.name,
       proxyName: proxyNameForNode(node),
       listenHost: config.listenHost,
       port: Number(node.assignedPort)
-    }))
+    })),
+    skippedNodes
   };
 }
 
@@ -144,20 +173,18 @@ export function proxyNameForNode(node: Pick<ProxyNode, "hash" | "assignedPort">)
 
 function renderableProxyRaw(raw: Record<string, unknown>): Record<string, unknown> {
   const clean = Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "__hiveChain"));
-  // Older imports persisted VMess's Clash-style camelCase key. Mihomo expects
-  // the canonical YAML spelling, so repair it when rendering existing rows.
-  if (clean["alter-id"] === undefined && clean.alterId !== undefined) {
-    clean["alter-id"] = clean.alterId;
+  // Older imports persisted VMess's dashed key. Mihomo expects the camelCase
+  // spelling, so repair it when rendering existing rows.
+  if (clean.alterId === undefined && clean["alter-id"] !== undefined) {
+    clean.alterId = clean["alter-id"];
   }
-  delete clean.alterId;
+  delete clean["alter-id"];
   if (typeof clean.uri === "string" && (typeof clean.server !== "string" || typeof clean.port !== "number")) {
     const expanded = parseProxyUri(clean.uri, typeof clean.name === "string" ? clean.name : "proxy");
     if (expanded && typeof expanded.server === "string" && typeof expanded.port === "number" && expanded.uri === undefined) {
       return Object.fromEntries(Object.entries(expanded).filter(([key]) => key !== "uri" && key !== "__hiveChain"));
     }
-    throw new Error(
-      `无法渲染节点 "${String(clean.name ?? "proxy")}"：URI 协议未被 Hive 解析，请改用 Clash/Mihomo YAML 节点格式。`
-    );
+    throw new Error(`URI 协议未被 Hive 解析，请改用 Clash/Mihomo YAML 节点格式。`);
   }
   if (typeof clean.server === "string" && typeof clean.port === "number") delete clean.uri;
   return clean;
