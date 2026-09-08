@@ -32,6 +32,9 @@ export function createChainProxyNode(input: CreateChainProxyInput): ProxyNode {
   const raw: Record<string, unknown> = {
     ...input.target.raw,
     name,
+    // The renderer recomputes this from the current front node port. Keep the
+    // initial value for old callers and persisted rows, but never trust it
+    // after a port rebalance.
     "dialer-proxy": `hive-${input.front.assignedPort}-${input.front.hash.slice(0, 8)}`,
     __hiveChain: {
       ...chainMetadata,

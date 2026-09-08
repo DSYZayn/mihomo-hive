@@ -87,6 +87,11 @@ export function renderMihomoConfig(
       // 仍使用旧凭据或旧传输参数。
       const raw = renderableProxyRaw(node.kind === "chain" && target ? target.raw : node.raw);
       if (node.kind === "chain" && front?.assignedPort) {
+        // A target may itself have been imported from a config containing a
+        // dialer-proxy field. A Hive chain owns this field and must replace it
+        // completely; retaining a stale upstream creates an accidental third
+        // hop or a reference to a proxy that is not in the generated config.
+        delete raw["dialer-proxy"];
         raw["dialer-proxy"] = proxyNameForNode(front);
       }
       renderedEntries.set(node.hash, { node, raw: { ...raw, name: proxyNameForNode(node) } });

@@ -26,8 +26,9 @@ export function buildSubscriptionImportPreview(input: BuildSubscriptionPreviewIn
   const items = parsed.map((node) => {
     const matchedKeywords = matchKeywords(node, excludeKeywords);
     const existingNode = existing.get(proxyIdentityHash(node.raw));
-    const duplicate = seen.has(node.hash);
-    seen.add(node.hash);
+    const identity = proxyIdentityHash(node.raw);
+    const duplicate = seen.has(identity);
+    seen.add(identity);
 
     if (matchedKeywords.length > 0) {
       return previewItem(node, "skip_filtered", `命中过滤关键词：${matchedKeywords.join("、")}`, matchedKeywords, existingNode);
@@ -79,8 +80,12 @@ export function filterPreviewImportableNodes(input: BuildSubscriptionPreviewInpu
   const preview = buildSubscriptionImportPreview(input);
   const parsed = parseSubscription(input.content, input.source.id ?? "preview");
   const existing = new Map(input.existingNodes.map((node) => [proxyIdentityHash(node.raw), node]));
-  return parsed.filter((_, index) => {
+  const seen = new Set<string>();
+  return parsed.filter((node, index) => {
     const item = preview.items[index];
+    const identity = proxyIdentityHash(node.raw);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
     return item?.action === "import" || item?.action === "update";
   }).map((node) => {
     const existingNode = existing.get(proxyIdentityHash(node.raw));
