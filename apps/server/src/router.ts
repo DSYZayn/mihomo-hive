@@ -421,7 +421,8 @@ export const appRouter = t.router({
         };
       }),
     previewDelete: protectedProcedure.input(z.object({ hashes: z.array(z.string().min(8)).min(1) })).query(async ({ ctx, input }) => {
-      const nodes = selectNodes(ctx.repo.listNodes(), input.hashes);
+      const hashes = uniqueHashes(input.hashes);
+      const nodes = selectNodes(ctx.repo.listNodes(), hashes);
       const snapshot = await loadSub2ApiSnapshot(ctx.repo);
       return buildNodeDeletionPlan({ nodes, proxies: snapshot.proxies, accounts: snapshot.accounts, exportHost: ctx.config.exportHost });
     }),
@@ -433,8 +434,9 @@ export const appRouter = t.router({
         })
       )
       .mutation(async ({ ctx, input }) => {
-        const nodes = selectNodes(ctx.repo.listNodes(), input.hashes);
-        assertNoChainDependencies(ctx.repo.listNodes(), input.hashes);
+        const hashes = uniqueHashes(input.hashes);
+        const nodes = selectNodes(ctx.repo.listNodes(), hashes);
+        assertNoChainDependencies(ctx.repo.listNodes(), hashes);
         if (nodes.some((node) => node.protected)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "包含受保护节点，请先解除保护。" });
         }
@@ -506,7 +508,7 @@ export const appRouter = t.router({
 
           const localStepIndex = client ? 3 : 0;
           updateJobStep(job.id, localStepIndex, "running", "删除本地节点。");
-          const deleted = ctx.repo.deleteNodes(input.hashes);
+          const deleted = ctx.repo.deleteNodes(hashes);
           updateJobStep(job.id, localStepIndex, "success", `删除 ${deleted} 个本地节点。`);
 
           const overallStatus = failedSub2ApiDeletes.length === 0 ? "success" : "failed";
@@ -1992,10 +1994,14 @@ async function fetchSourceContent(repo: HiveRepository, source: SubscriptionSour
 function selectNodes(nodes: ProxyNode[], hashes: string[]): ProxyNode[] {
   const wanted = new Set(hashes);
   const selected = nodes.filter((node) => wanted.has(node.hash));
-  if (selected.length !== hashes.length) {
+  if (selected.length !== wanted.size) {
     throw new TRPCError({ code: "NOT_FOUND", message: "部分节点不存在。" });
   }
   return selected;
+}
+
+function uniqueHashes(hashes: string[]): string[] {
+  return Array.from(new Set(hashes));
 }
 
 function assertNoChainDependencies(allNodes: ProxyNode[], hashes: string[]): void {

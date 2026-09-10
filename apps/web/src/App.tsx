@@ -126,12 +126,13 @@ function Dashboard(props: { onLogout: () => void }) {
 
   const allNodes = nodes.data ?? [];
   React.useEffect(() => {
+    if (!nodes.data) return;
     const known = new Set(allNodes.map((node) => node.hash));
     setSelectedHashesList((current) => {
-      const next = current.filter((hash) => known.has(hash));
+      const next = Array.from(new Set(current)).filter((hash) => known.has(hash));
       return next.length === current.length ? current : next;
     });
-  }, [allNodes, setSelectedHashesList]);
+  }, [allNodes, nodes.data, setSelectedHashesList]);
   const filteredNodes = React.useMemo(() => filterNodes(allNodes, filters), [allNodes, filters]);
   const activeCount = allNodes.filter((node) => node.status === "active").length;
   const assignedCount = allNodes.filter((node) => node.assignedPort).length;

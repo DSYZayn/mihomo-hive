@@ -105,11 +105,11 @@ function normalizeProxyUri(uri: string): string {
 }
 
 function omitNonIdentityProxyMetadata(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => omitNonIdentityProxyMetadata(item));
+  if (Array.isArray(value)) return value.filter((item) => item !== undefined).map((item) => omitNonIdentityProxyMetadata(item));
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !NON_IDENTITY_PROXY_KEYS.has(normalizeProxyKey(key)))
+      .filter(([key, item]) => !NON_IDENTITY_PROXY_KEYS.has(normalizeProxyKey(key)) && item !== undefined)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, item]) => {
         const normalizedKey = normalizeProxyKey(key);

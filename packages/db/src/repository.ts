@@ -409,11 +409,14 @@ export class HiveRepository {
   }
 
   /**
-   * 合并旧版本按完整 raw 配置生成的重复节点。
+   * 合并订阅刷新遗留的重复节点。
    * 订阅供应商改名或调整展示元数据时，旧版本会留下多条同一出口记录；
+   * 某些订阅还会重复发布同一名称但不同 raw 形态的候选节点。
+   * 先按名称合并明确的未使用候选，再按连接参数指纹合并历史记录；
    * 保留运维信息最完整的一条，并把 hash 规范化到连接参数指纹。
    */
   deduplicateNodesByIdentity(): number {
+    let removed = this.deduplicateUnassignedNodesByName();
     const nodes = this.listNodes();
     const groups = new Map<string, ProxyNode[]>();
     for (const node of nodes) {
@@ -423,7 +426,6 @@ export class HiveRepository {
       groups.set(key, group);
     }
 
-    let removed = 0;
     const transaction = this.sqlite.transaction(() => {
       for (const [identity, group] of groups) {
         group.sort((a, b) => nodeKeepScore(b) - nodeKeepScore(a));
@@ -455,6 +457,45 @@ export class HiveRepository {
             );
             this.sqlite.prepare("UPDATE nodes SET hash = ? WHERE hash = ?").run(identity, winner.hash);
           }
+        }
+      }
+    });
+    transaction();
+    return removed;
+  }
+
+  /**
+   * 订阅供应商有时会用同一个展示名重复发布多条候选记录，而连接参数又不一致，
+   * 仅按 raw identity 无法发现。这类记录尚未分配端口、推送远端或承载账号时，
+   * 名称是用户实际可见的唯一判据，可以安全收敛为一条。
+   */
+  private deduplicateUnassignedNodesByName(): number {
+    const groups = new Map<string, ProxyNode[]>();
+    for (const node of this.listNodes()) {
+      const key = duplicateNameKey(node);
+      if (!key) continue;
+      const group = groups.get(key) ?? [];
+      group.push(node);
+      groups.set(key, group);
+    }
+
+    let removed = 0;
+    const transaction = this.sqlite.transaction(() => {
+      for (const group of groups.values()) {
+        if (group.length < 2) continue;
+        group.sort((a, b) => nodeKeepScore(b) - nodeKeepScore(a));
+        const winner = group[0];
+        if (!winner) continue;
+        for (const loser of group.slice(1)) {
+          this.sqlite.prepare("UPDATE accounts SET egress_node_hash = ? WHERE egress_node_hash = ?").run(winner.hash, loser.hash);
+          this.sqlite.prepare("UPDATE nodes SET chain_json = replace(chain_json, ?, ?), raw_json = replace(raw_json, ?, ?) WHERE kind = 'chain'").run(
+            loser.hash,
+            winner.hash,
+            loser.hash,
+            winner.hash
+          );
+          this.sqlite.prepare("DELETE FROM nodes WHERE hash = ?").run(loser.hash);
+          removed += 1;
         }
       }
     });
@@ -1981,6 +2022,22 @@ function nodeKeepScore(node: ProxyNode): number {
   );
 }
 
+function duplicateNameKey(node: ProxyNode): string | undefined {
+  if (
+    node.kind === "chain" ||
+    node.lifecycleStatus !== "candidate" ||
+    node.status !== "untested" ||
+    node.assignedPort ||
+    node.sub2apiProxyId ||
+    node.protected
+  ) {
+    return undefined;
+  }
+  const name = node.name.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  if (!name) return undefined;
+  return `${node.sourceId}\u0000${node.type.toLocaleLowerCase()}\u0000${name}`;
+}
+
 function assertNoDependentChains(nodes: ProxyNode[], hashes: string[]): void {
   const wanted = new Set(hashes);
   const dependent = nodes.filter(
@@ -2036,7 +2093,7 @@ function chainFromRaw(raw: Record<string, unknown>): ProxyNode["chain"] {
 }
 
 function stableIdentityString(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableIdentityString).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.filter((item) => item !== undefined).map(stableIdentityString).join(",")}]`;
   if (!value || typeof value !== "object") return JSON.stringify(value);
   const record = value as Record<string, unknown>;
   if (typeof record.uri === "string") {
@@ -2047,7 +2104,7 @@ function stableIdentityString(value: unknown): string {
     });
   }
   return `{${Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => !["name", "ps", "remarks", "remark", "display_name"].includes(key.toLowerCase()))
+    .filter(([key, item]) => !["name", "ps", "remarks", "remark", "display_name"].includes(key.toLowerCase()) && item !== undefined)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, item]) => `${JSON.stringify(key)}:${stableIdentityString(item)}`)
     .join(",")}}`;

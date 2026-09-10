@@ -149,6 +149,49 @@ describe("HiveRepository node identity deduplication", () => {
     expect(nodes[0]?.assignedPort).toBe(10001);
     expect(nodes[0]?.name).toBe("SG-1 renamed");
   });
+
+  it("merges rows when legacy optional fields are omitted or explicitly undefined", () => {
+    const first = node("legacy-optional", "SG-1", { "ws-opts": { path: "/chat", headers: { Host: "EDGE.EXAMPLE.COM" } } }, 10001);
+    repo.upsertNodes([first]);
+    cloneLegacyRow(
+      sqlite,
+      first.hash,
+      "legacy-optional-copy",
+      {
+        ...first.raw,
+        "ws-opts": {
+          path: "/chat",
+          headers: { Host: "edge.example.com" },
+          "max-early-data": undefined
+        }
+      },
+      "SG-1 renamed"
+    );
+
+    expect(repo.deduplicateNodesByIdentity()).toBe(1);
+    expect(repo.listNodes()).toHaveLength(1);
+  });
+
+  it("merges same-name unassigned candidates from the same source", () => {
+    repo.upsertNodes([
+      node("name-copy-a", "HK 香港A03 | IEPL", { server: "sg-a.example.com" }),
+      node("name-copy-b", " hk  香港a03 | iepl ", { server: "sg-b.example.com" })
+    ]);
+
+    expect(repo.listNodes()).toHaveLength(2);
+    expect(repo.deduplicateNodesByIdentity()).toBe(1);
+    expect(repo.listNodes()).toHaveLength(1);
+  });
+
+  it("does not merge same-name nodes after a port is assigned", () => {
+    repo.upsertNodes([
+      node("name-live-a", "HK 香港A03 | IEPL", { server: "sg-a.example.com" }, 10001),
+      node("name-live-b", "HK 香港A03 | IEPL", { server: "sg-b.example.com" }, 10002)
+    ]);
+
+    expect(repo.deduplicateNodesByIdentity()).toBe(0);
+    expect(repo.listNodes()).toHaveLength(2);
+  });
 });
 
 function node(hash: string, name: string, options: Record<string, unknown>, assignedPort?: number): ProxyNode {
