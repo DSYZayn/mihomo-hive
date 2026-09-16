@@ -1,8 +1,13 @@
 import { z } from "zod";
 
+export const SUB2API_PROXY_NAME_MAX_BYTES = 100;
+
 export const sub2ApiProxySchema = z.object({
   proxy_key: z.string().min(1),
-  name: z.string().min(1),
+  name: z.string().min(1).refine(
+    (value) => new TextEncoder().encode(value).length <= SUB2API_PROXY_NAME_MAX_BYTES,
+    "Sub2API proxy name exceeds the UTF-8 byte limit"
+  ),
   protocol: z.literal("socks5"),
   host: z.string().min(1),
   port: z.number().int().min(1).max(65535),
@@ -287,12 +292,22 @@ export const sub2ApiMaintenanceApplyResultSchema = z.object({
 
 export type Sub2ApiMaintenanceApplyResult = z.infer<typeof sub2ApiMaintenanceApplyResultSchema>;
 
+export const sub2ApiImportErrorSchema = z.object({
+  kind: z.string(),
+  name: z.string().optional(),
+  proxy_key: z.string().optional(),
+  message: z.string()
+});
+
+export type Sub2ApiImportError = z.infer<typeof sub2ApiImportErrorSchema>;
+
 export const sub2ApiImportProxyDataResultSchema = z.object({
   proxy_created: z.number().int().nonnegative().default(0),
   proxy_reused: z.number().int().nonnegative().default(0),
   proxy_failed: z.number().int().nonnegative().default(0),
   account_created: z.number().int().nonnegative().default(0),
-  account_failed: z.number().int().nonnegative().default(0)
+  account_failed: z.number().int().nonnegative().default(0),
+  errors: z.array(sub2ApiImportErrorSchema).default([])
 });
 
 export type Sub2ApiImportProxyDataResult = z.infer<typeof sub2ApiImportProxyDataResultSchema>;

@@ -360,11 +360,7 @@ export const appRouter = t.router({
         };
       }),
     /**
-     * "启用调度" 按钮的语义：原子地把所选节点设为 schedulable，并同时推送到 Sub2API
-     * （importProxyData + 回填 sub2apiProxyId）。这样节点立刻出现在编排器视野里，
-     * 不再需要用户额外去高级运维页找"推送"按钮。
-     *
-     * Sub2API 未连接时只改 lifecycle，syncedCount=0，前端给出对应提示。
+     * 启用调度：标记 schedulable、推送 Sub2API，并根据本批节点的 live 映射确认结果。
      */
     enableScheduling: protectedProcedure
       .input(z.object({ hashes: z.array(z.string().min(8)).min(1) }))
@@ -405,12 +401,38 @@ export const appRouter = t.router({
 
         // 3. 回填 sub2apiProxyId
         const liveProxies = await client.listAllProxies();
+        const selectedHashes = new Set(input.hashes);
+        const selectedNodes = ctx.repo.listNodes().filter((node) => selectedHashes.has(node.hash));
         const mappings = mapLocalNodesToSub2ApiProxies({
-          nodes: ctx.repo.listNodes(),
-          proxies: liveProxies,
+          nodes: selectedNodes,
+          proxies: liveProxies.filter(
+            (proxy) => proxy.protocol === "socks5" && proxy.status === "active" && !proxy.username && !proxy.password
+          ),
           exportHost: ctx.config.exportHost
         });
         ctx.repo.updateSub2ApiProxyMappings(mappings);
+
+        const mappedHashes = new Set(mappings.map((mapping) => mapping.hash));
+        const unmapped = selectedNodes.filter((node) => !mappedHashes.has(node.hash));
+        if (
+          summary.proxy_failed > 0 ||
+          summary.errors.length > 0 ||
+          summary.proxy_created + summary.proxy_reused !== proxies.length ||
+          unmapped.length > 0
+        ) {
+          const details = summary.errors.map((error) => `${error.name ?? error.kind}: ${error.message}`);
+          if (unmapped.length > 0) {
+            details.push(`未确认远端可用代理：${unmapped.map((node) => node.name).join("、")}`);
+          }
+          return {
+            updated: updatedNodes.length,
+            syncedToSub2api: false,
+            reason: "incomplete-sync" as const,
+            summary,
+            mappedNodes: mappings.length,
+            message: `Sub2API 已确认 ${mappings.length}/${updatedNodes.length} 个节点；新增 ${summary.proxy_created}，复用 ${summary.proxy_reused}，失败 ${summary.proxy_failed}。${details.join("；")}`
+          };
+        }
 
         return {
           updated: updatedNodes.length,

@@ -12,6 +12,36 @@ describe("exportSub2Api", () => {
     expect(result.proxies[0]?.status).toBe("active");
   });
 
+  it.each([
+    ["ASCII", "front-node-".repeat(8) + " -> " + "target-node-".repeat(8)],
+    ["UTF-8", "\u9999\u6e2f".repeat(12) + " -> " + "\u65e5\u672c".repeat(12)],
+    ["supplementary Unicode", "\u{1F1EF}\u{1F1F5}".repeat(16)]
+  ])("fits long %s names into the remote byte limit with a stable port suffix", (_label, name) => {
+    const chain = {
+      ...node({ hash: "chain00001", name, status: "active", assignedPort: 10003 }),
+      kind: "chain" as const
+    };
+    const options = { host: "127.0.0.1", namePrefix: "HIVE-" };
+    const result = exportSub2Api([chain], options);
+    const proxy = result.proxies[0]!;
+
+    expect(Buffer.byteLength(proxy.name, "utf8")).toBeLessThanOrEqual(100);
+    expect(proxy.name.startsWith("HIVE-")).toBe(true);
+    expect(proxy.name.endsWith("-10003")).toBe(true);
+    expect(new TextDecoder("utf-8", { fatal: true }).decode(new TextEncoder().encode(proxy.name))).toBe(proxy.name);
+    expect(proxy.proxy_key).toBe("socks5|127.0.0.1|10003||");
+    expect(exportSub2Api([chain], options)).toEqual(result);
+  });
+
+  it("preserves short names with their configured managed prefix", () => {
+    const result = exportSub2Api([node({ hash: "short00001", name: "front -> target", status: "active", assignedPort: 10003 })], {
+      host: "127.0.0.1",
+      namePrefix: "MH-"
+    });
+
+    expect(result.proxies[0]?.name).toBe("MH-front -> target");
+  });
+
   it("exports selected nodes with assigned ports and marks failed nodes inactive by default", () => {
     const result = exportSub2Api(
       [

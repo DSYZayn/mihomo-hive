@@ -305,7 +305,9 @@ function Dashboard(props: { onLogout: () => void }) {
     onMutate: () =>
       startTask(setTask, "正在启用调度", "把所选节点设为可调度，并推送到 Sub2API 代理池。"),
     onSuccess: async (result) => {
-      if (result.syncedToSub2api && result.summary) {
+      if (result.reason === "incomplete-sync") {
+        failTask(setTask, pushToast, "Sub2API 推送未完成", result.message);
+      } else if (result.syncedToSub2api && result.summary) {
         await finishTask(
           setTask,
           pushToast,

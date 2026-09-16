@@ -1,4 +1,5 @@
 import {
+  SUB2API_PROXY_NAME_MAX_BYTES,
   sub2ApiExportPreviewSchema,
   sub2ApiExportSchema,
   type Sub2ApiExportPreview,
@@ -26,7 +27,7 @@ export function exportSub2Api(nodes: ProxyNode[], options: ExportSub2ApiOptions)
       const proxyKey = [protocol, options.host, Number(node.assignedPort), username ?? "", password ?? ""].join("|");
       return {
         proxy_key: proxyKey,
-        name: `${options.namePrefix ?? ""}${node.name}`,
+        name: exportProxyName(node, options.namePrefix ?? ""),
         protocol,
         host: options.host,
         port: Number(node.assignedPort),
@@ -40,6 +41,28 @@ export function exportSub2Api(nodes: ProxyNode[], options: ExportSub2ApiOptions)
     proxies,
     accounts: []
   });
+}
+
+function exportProxyName(node: ProxyNode, prefix: string): string {
+  const encoder = new TextEncoder();
+  const name = `${prefix}${node.name}`;
+  if (encoder.encode(name).length <= SUB2API_PROXY_NAME_MAX_BYTES) return name;
+
+  // The remote limit is measured in UTF-8 bytes; reserve the managed prefix and listener identity.
+  const suffix = `-${node.assignedPort}`;
+  const budget = SUB2API_PROXY_NAME_MAX_BYTES - encoder.encode(prefix + suffix).length;
+  if (budget <= 0) {
+    throw new Error("Sub2API managed proxy prefix is too long; shorten it before syncing.");
+  }
+  let truncated = "";
+  let bytes = 0;
+  for (const character of node.name) {
+    const size = encoder.encode(character).length;
+    if (bytes + size > budget) break;
+    truncated += character;
+    bytes += size;
+  }
+  return `${prefix}${truncated}${suffix}`;
 }
 
 export function previewSub2ApiExport(nodes: ProxyNode[], options: ExportSub2ApiOptions): Sub2ApiExportPreview {
