@@ -31,13 +31,15 @@ export interface TaskFeedbackController {
 export function useTaskFeedback(): TaskFeedbackController {
   const [task, setTask] = React.useState<TaskFeedback>(initialTask);
   const [toasts, setToasts] = React.useState<ToastMessage[]>([]);
+  const toastSequence = React.useRef(0);
 
   const dismissToast = React.useCallback((id: string) => {
     setToasts((items) => items.filter((item) => item.id !== id));
   }, []);
 
   const pushToast = React.useCallback<TaskFeedbackController["pushToast"]>((tone, title, detail) => {
-    const id = crypto.randomUUID();
+    // IDs only identify toasts in this hook; public HTTP has no crypto.randomUUID.
+    const id = `toast-${++toastSequence.current}`;
     setToasts((items) => [...items.slice(-3), { id, tone, title, detail }]);
     window.setTimeout(() => {
       setToasts((items) => items.filter((item) => item.id !== id));
