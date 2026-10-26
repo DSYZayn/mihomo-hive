@@ -95,7 +95,7 @@ function accountProxyWritesDisabledError(): TRPCError {
 
 export const appRouter = t.router({
   runtime: t.router({
-    config: protectedProcedure.query(({ ctx }) => ctx.config),
+    config: protectedProcedure.query(({ ctx }) => ({ ...ctx.config, proxyAuth: undefined })),
     status: protectedProcedure.query(async ({ ctx }) => {
       const processStatus = await readMihomoStatus(ctx.config);
       // PID 存活不等于固定出口 listener 完整。只核对仍关联 Sub2API
@@ -381,6 +381,7 @@ export const appRouter = t.router({
 
         // 2. 推送到 Sub2API（仅本批 hashes，且过滤 active + 已分端口）
         const payload = exportSub2Api(ctx.repo.listNodes(), {
+          ...ctx.config.proxyAuth,
           host: ctx.config.exportHost,
           namePrefix: connection.managedProxyPrefix,
           selectedHashes: input.hashes
@@ -406,8 +407,9 @@ export const appRouter = t.router({
         const mappings = mapLocalNodesToSub2ApiProxies({
           nodes: selectedNodes,
           proxies: liveProxies.filter(
-            (proxy) => proxy.protocol === "socks5" && proxy.status === "active" && !proxy.username && !proxy.password
+            (proxy) => proxy.status === "active"
           ),
+          proxyAuth: ctx.config.proxyAuth,
           exportHost: ctx.config.exportHost
         });
         ctx.repo.updateSub2ApiProxyMappings(mappings);
@@ -489,7 +491,7 @@ export const appRouter = t.router({
               client.listAllAccounts(sub2ApiAccountFiltersSchema.parse({ status: "" }))
             ]);
             plan = buildNodeDeletionPlan({ nodes, proxies, accounts, exportHost: ctx.config.exportHost });
-            const mappings = mapLocalNodesToSub2ApiProxies({ nodes, proxies, exportHost: ctx.config.exportHost });
+            const mappings = mapLocalNodesToSub2ApiProxies({ nodes, proxies, proxyAuth: ctx.config.proxyAuth, exportHost: ctx.config.exportHost });
             const proxyNames = new Map(proxies.map((proxy) => [proxy.id, proxy.name]));
             updateJobStep(job.id, 0, "success", `匹配到 ${mappings.length} 个 Sub2API 代理。`);
 
@@ -715,7 +717,7 @@ export const appRouter = t.router({
           // L2：通过 mihomo listener 到每个业务目标（openai/claude）的端到端延迟
           const results = [];
           for (const target of targets) {
-            results.push(await testProxyTarget({ host, port: Number(node.assignedPort), target, timeoutMs: input.timeoutMs }));
+            results.push(await testProxyTarget({ auth: ctx.config.proxyAuth, host, port: Number(node.assignedPort), target, timeoutMs: input.timeoutMs }));
           }
           const passed = results.every((result) => result.ok);
           // 用 OpenAI/Claude 的最大延迟做 gate 判定（保持旧语义不变，只改 lastTestLatencyMs 字段含义）
@@ -784,9 +786,10 @@ export const appRouter = t.router({
   exports: t.router({
     sub2api: protectedProcedure
       .input(z.object({ host: z.string().optional() }).optional())
-      .query(({ ctx, input }) => exportSub2Api(ctx.repo.listNodes(), { host: input?.host ?? ctx.config.exportHost })),
+      .query(({ ctx, input }) => exportSub2Api(ctx.repo.listNodes(), { ...ctx.config.proxyAuth, host: input?.host ?? ctx.config.exportHost })),
     previewSub2api: protectedProcedure.input(sub2ApiExportRequestSchema).query(({ ctx, input }) =>
       previewSub2ApiExport(ctx.repo.listNodes(), {
+        ...ctx.config.proxyAuth,
         host: input.host ?? ctx.config.exportHost,
         selectedHashes: input.selectedHashes,
         failedNodeStatus: input.failedNodeStatus,
@@ -797,6 +800,7 @@ export const appRouter = t.router({
       .input(sub2ApiExportRequestSchema.extend({ output: z.string().optional() }))
       .mutation(async ({ ctx, input }) => {
         const payload = exportSub2Api(ctx.repo.listNodes(), {
+          ...ctx.config.proxyAuth,
           host: input.host ?? ctx.config.exportHost,
           selectedHashes: input.selectedHashes,
           failedNodeStatus: input.failedNodeStatus,
@@ -880,7 +884,7 @@ export const appRouter = t.router({
     sync: protectedProcedure.mutation(async ({ ctx }) => {
       const client = createConfiguredSub2ApiClient(ctx.repo);
       const [proxies, accounts] = await Promise.all([client.listAllProxies(), client.listAllAccounts(sub2ApiAccountFiltersSchema.parse({}))]);
-      const mappings = mapLocalNodesToSub2ApiProxies({ nodes: ctx.repo.listNodes(), proxies, exportHost: ctx.config.exportHost });
+      const mappings = mapLocalNodesToSub2ApiProxies({ nodes: ctx.repo.listNodes(), proxies, proxyAuth: ctx.config.proxyAuth, exportHost: ctx.config.exportHost });
       ctx.repo.updateSub2ApiProxyMappings(mappings);
       const protectedRule = ctx.repo.getSub2ApiProtectedRule();
       return {
@@ -930,6 +934,7 @@ export const appRouter = t.router({
             updateJobStep(job.id, 0, "running", "整理待同步节点。");
             const localNodes = ctx.repo.listNodes();
             const exportPayload = exportSub2Api(localNodes, {
+              ...ctx.config.proxyAuth,
               host: ctx.config.exportHost,
               namePrefix: connection.managedProxyPrefix,
               ...(input.selectedHashes ? { selectedHashes: input.selectedHashes } : {})
@@ -961,6 +966,7 @@ export const appRouter = t.router({
             const mappings = mapLocalNodesToSub2ApiProxies({
               nodes: localNodes,
               proxies: liveProxies,
+              proxyAuth: ctx.config.proxyAuth,
               exportHost: ctx.config.exportHost
             });
             ctx.repo.updateSub2ApiProxyMappings(mappings);
@@ -1351,7 +1357,7 @@ export const appRouter = t.router({
           const persisted = ctx.repo.getAccountFleetSpec();
           const spec = input ? { ...persisted, codexTool: input } : persisted;
           try {
-            const adapter = await buildCodexToolAdapter(ctx.repo, safeLoadCrypto(), spec, null);
+            const adapter = await buildCodexToolAdapter(ctx.repo, safeLoadCrypto(), spec, null, { runtimeConfig: ctx.config });
             const result = await adapter.smsCountries({ limit: 1, timeoutMs: 15_000 });
             return {
               ok: true as const,

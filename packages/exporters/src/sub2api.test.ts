@@ -3,6 +3,15 @@ import { exportSub2Api, previewSub2ApiExport } from "./sub2api.js";
 import type { ProxyNode } from "@mihomo-hive/schemas";
 
 describe("exportSub2Api", () => {
+  it("exports the shared credentials verbatim in every proxy and its stable key", () => {
+    const options = { host: "proxy.example.com", username: "hive", password: "p@ss:word#%", namePrefix: "MH-" };
+    const result = exportSub2Api([10001, 10002].map((port) => node({ hash: `hash-${port}`, assignedPort: port, status: "active" })), options);
+    for (const proxy of result.proxies) {
+      expect(proxy).toMatchObject({ username: options.username, password: options.password });
+      expect(proxy.proxy_key).toBe(`socks5|proxy.example.com|${proxy.port}|hive|p@ss:word#%`);
+      expect(proxy.name.startsWith("MH-")).toBe(true);
+    }
+  });
   it("keeps empty username and password fields in proxy_key", () => {
     const result = exportSub2Api([node({ hash: "1234567890", status: "active", assignedPort: 10001 })], {
       host: "127.0.0.1"

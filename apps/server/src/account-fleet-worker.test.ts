@@ -74,18 +74,20 @@ function makeSpec(overrides: Partial<AccountFleetSpec> = {}): AccountFleetSpec {
 
 describe("AccountJobsWorker", () => {
   let tmpDir: string;
+  let sqlite: ReturnType<typeof openSqlite>;
   let repo: HiveRepository;
   let crypto: AccountCrypto;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "hive-worker-"));
-    const sqlite = openSqlite(join(tmpDir, "hive.sqlite"));
+    sqlite = openSqlite(join(tmpDir, "hive.sqlite"));
     repo = new HiveRepository(sqlite);
     crypto = createAccountCryptoFromKey(randomBytes(32));
     repo.saveAccountFleetSpec(makeSpec());
   });
 
   afterEach(() => {
+    sqlite.close();
     rmSync(tmpDir, { recursive: true, force: true });
     vi.unstubAllGlobals();
   });

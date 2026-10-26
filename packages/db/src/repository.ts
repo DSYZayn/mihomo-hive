@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { fetchSubscriptionText, parseSubscriptionOrThrow } from "@mihomo-hive/core";
 import {
   accountBudgetRecordSchema,
   accountFleetSpecSchema,
@@ -278,20 +279,15 @@ export class HiveRepository {
   }
 
   async fetchSubscriptionContent(source: SubscriptionSource): Promise<string> {
-    if (source.kind === "file") {
-      return readFile(source.value, "utf8");
+    try {
+      const content = source.kind === "file"
+        ? await readFile(source.value, "utf8")
+        : await fetchSubscriptionText(source.value, { userAgent: this.options.subscriptionUserAgent });
+      parseSubscriptionOrThrow(content, source.id);
+      return content;
+    } catch (error) {
+      throw new Error(`订阅「${source.name}」拉取失败：${error instanceof Error ? error.message : "未知错误"}`);
     }
-    const response = await fetch(source.value, {
-      headers: {
-        "User-Agent": this.options.subscriptionUserAgent ?? "Clash.Meta",
-        Accept: "text/yaml, application/yaml, text/plain, */*",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
-      }
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to fetch subscription ${source.name}: HTTP ${response.status}`);
-    }
-    return response.text();
   }
 
   updateSubscriptionContent(id: string, content: string): void {

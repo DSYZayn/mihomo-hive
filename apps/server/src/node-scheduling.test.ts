@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChainProxyNode } from "@mihomo-hive/core";
+import * as core from "@mihomo-hive/core";
 import { HiveRepository, openSqlite, type HiveSqlite } from "@mihomo-hive/db";
 import {
   proxyNodeSchema,
@@ -9,6 +10,7 @@ import {
   type Sub2ApiProxyRecord
 } from "@mihomo-hive/schemas";
 import { appRouter } from "./router.js";
+import { startNodeMaintenanceScheduler } from "./orchestrator.js";
 
 describe("nodes.enableScheduling", () => {
   let sqlite: HiveSqlite;
@@ -59,7 +61,10 @@ describe("nodes.enableScheduling", () => {
             (Buffer.byteLength(proxy.name, "utf8") > 100 ? "name: value is greater than the required length" : undefined);
           if (error) {
             errors.push({ kind: "proxy", name: proxy.name, proxy_key: proxy.proxy_key, message: error });
-          } else if (remoteProxies.some((remote) => remote.host === proxy.host && remote.port === proxy.port)) {
+          } else if (remoteProxies.some((remote) =>
+            remote.protocol === proxy.protocol && remote.host === proxy.host && remote.port === proxy.port &&
+            (remote.username ?? "") === (proxy.username ?? "") && (remote.password ?? "") === (proxy.password ?? "")
+          )) {
             reused += 1;
           } else {
             remoteProxies.push({ ...proxy, id: remoteProxies.length + 1 });
@@ -77,8 +82,53 @@ describe("nodes.enableScheduling", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     sqlite.close();
+  });
+
+  it("pushes shared credentials, maps the authenticated record and reuses it on retry", async () => {
+    const proxyAuth = { username: "hive", password: "p@ss:word#%" };
+    caller = appRouter.createCaller({ repo, config: runtimeConfigSchema.parse({ proxyAuth }), authenticated: true });
+    // A legacy unauthenticated proxy exists on exactly the same host and port.
+    const result = await caller.nodes.enableScheduling({ hashes: ["front00001"] });
+    expect(imported[0]).toMatchObject({ ...proxyAuth, proxy_key: "socks5|127.0.0.1|10001|hive|p@ss:word#%" });
+    expect(result).toMatchObject({ syncedToSub2api: true, mappedNodes: 1, summary: { proxy_created: 1 } });
+    expect(repo.listNodes().find((node) => node.hash === "front00001")?.sub2apiProxyId).toBe(2);
+    expect(await caller.nodes.enableScheduling({ hashes: ["front00001"] })).toMatchObject({
+      syncedToSub2api: true, mappedNodes: 1, summary: { proxy_created: 0, proxy_reused: 1 }
+    });
+    const preview = await caller.exports.previewSub2api({ selectedHashes: ["front00001"] });
+    expect(preview.export.proxies[0]).toMatchObject(proxyAuth);
+    expect((await caller.exports.sub2api()).proxies[0]).toMatchObject(proxyAuth);
+    expect(await caller.runtime.config()).not.toHaveProperty("proxyAuth.password");
+  });
+
+  it("includes credentials in the explicit managed-proxy push", async () => {
+    const proxyAuth = { username: "hive", password: "shared-secret" };
+    repo.markNodesLifecycle([chain.hash], "schedulable");
+    caller = appRouter.createCaller({ repo, config: runtimeConfigSchema.parse({ proxyAuth }), authenticated: true });
+    const result = await caller.sub2api.automation.syncManagedProxies({ selectedHashes: [chain.hash] });
+    expect(result).toMatchObject({ synced: 1, mappedNodes: 1 });
+    expect(imported[0]).toMatchObject({ ...proxyAuth, port: 10003 });
+  });
+
+  it("uses the shared credentials for background health checks and automatic Sub2API pushes", async () => {
+    const proxyAuth = { username: "hive", password: "background-secret" };
+    const config = runtimeConfigSchema.parse({ proxyAuth });
+    repo.markNodesLifecycle(["front00001"], "schedulable");
+    vi.spyOn(core, "measureProxyTcpLatency").mockResolvedValue({ latencyMs: 1, error: null });
+    const probe = vi.spyOn(core, "testProxyTarget").mockResolvedValue({ targetId: "openai", ok: true, httpStatus: 401, latencyMs: 1, message: "ok" });
+    const scheduler = startNodeMaintenanceScheduler({ repo, config });
+    try {
+      expect(await scheduler.triggerNow()).toMatchObject({ pushedNodes: 1, mappedNodes: 1, failedNodes: 0 });
+      expect(probe).toHaveBeenCalled();
+      for (const [request] of probe.mock.calls) expect(request.auth).toEqual(proxyAuth);
+      expect(imported[0]).toMatchObject({ ...proxyAuth, port: 10001 });
+      expect(repo.listNodes().find((node) => node.assignedPort === 10001)?.sub2apiProxyId).toBe(2);
+    } finally {
+      scheduler.stop();
+    }
   });
 
   it("imports a long-named chain through its listener and persists the remote ID on retries", async () => {

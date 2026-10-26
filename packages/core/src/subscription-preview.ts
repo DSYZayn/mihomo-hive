@@ -4,7 +4,7 @@ import {
   type SubscriptionImportPreview,
   type SubscriptionSource
 } from "@mihomo-hive/schemas";
-import { parseSubscription } from "./subscription.js";
+import { parseSubscription, parseSubscriptionOrThrow } from "./subscription.js";
 import { proxyIdentityHash } from "./proxy-identity.js";
 
 export interface BuildSubscriptionPreviewInput {
@@ -15,7 +15,7 @@ export interface BuildSubscriptionPreviewInput {
 }
 
 export function buildSubscriptionImportPreview(input: BuildSubscriptionPreviewInput): SubscriptionImportPreview {
-  const parsed = parseSubscription(input.content, input.source.id ?? "preview");
+  const parsed = parseSubscriptionOrThrow(input.content, input.source.id ?? "preview");
   // Match by canonical connection identity rather than trusting a legacy row's
   // persisted hash. Older imports used opaque URI hashes, while a fresh parse
   // now expands the same endpoint into Mihomo fields.

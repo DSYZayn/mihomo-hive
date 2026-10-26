@@ -18,6 +18,8 @@
 import { randomUUID } from "node:crypto";
 import {
   buildEgressLoadMap,
+  buildProxyUrl,
+  localProbeHost,
   createAgentSpawner,
   createCodexToolAdapter,
   createSub2ApiClient,
@@ -314,7 +316,7 @@ async function runCodexLogin(
 
   const egress = resolveEgressForLogin(repo, spec, account);
   appendJobLog(job.id, egressLogLine(repo, spec, egress));
-  const adapter = await buildCodexToolAdapter(repo, crypto, spec, egress, { idempotencyKey: job.id });
+  const adapter = await buildCodexToolAdapter(repo, crypto, spec, egress, { idempotencyKey: job.id, runtimeConfig: config });
   appendJobLog(job.id, "调用 codex-tool login（chromium/Sentinel，串行排队中）…");
   // 串行化：codex-tool 的 chromium/Sentinel 调用不能并发（见 withCodexToolLock）。
   // P5-AS：抛出型失败（超时/非零退出）也要给节点记一笔（多为网络/代理类）。
@@ -384,6 +386,7 @@ async function runCodexRegister(
       : `注册邮箱域名: ${mail.domain || "(未配置)"}（单一域名,未启用域名池）`
   );
   const adapter = await buildCodexToolAdapter(repo, crypto, spec, egress, {
+    runtimeConfig: config,
     idempotencyKey: job.id,
     mailDomainOverride: mail.domain
   });
@@ -1369,7 +1372,7 @@ export async function buildCodexToolAdapter(
    * 调用方不需要走出口（如 codex sms countries 之类纯查询，但当前实现总传 egress）。
    */
   egress: EgressSelection | null,
-  opts?: { idempotencyKey?: string; mailDomainOverride?: string }
+  opts?: { idempotencyKey?: string; mailDomainOverride?: string; runtimeConfig?: RuntimeConfig }
 ): Promise<CodexToolAdapter> {
   // P5-AM: codexTool.skymail.adminPasswordRef / phoneSms.apiKeyRef 按设计是「明文存储」
   // （docs：私有部署 UI 不脱敏，加密留作未来增强）。早期代码无脑 crypto.decrypt() 会把
@@ -1401,7 +1404,10 @@ export async function buildCodexToolAdapter(
     // 实测 socks5:// 走"本地 DNS"(容器本地把域名解析成 IP 再发给代理)，代理出口连不上
     // 那个 IP → 全部超时(codex_login 0 成功)。http:// 代理走"远程 DNS"(代理自己解析)，
     // curl + chromium 都正常通(实测 gstatic 204 / auth.openai.com 403 reached)。
-    proxyDefault = egress ? `http://127.0.0.1:${egress.port}` : resolveLegacyEgressProxyUrl(repo, spec);
+    const runtime = opts?.runtimeConfig ?? defaultRuntimeConfig;
+    proxyDefault = egress
+      ? buildProxyUrl({ protocol: "http", host: localProbeHost(runtime.listenHost), port: egress.port, auth: runtime.proxyAuth })
+      : resolveLegacyEgressProxyUrl(repo, spec, runtime);
   }
   // P5-AI: 透明回灌 region_hint —— 上次注册成功的 sms_region_result blob 原样塞给
   // codex-tool 让它优先尝试该地区，Hive 不解析 blob 字段。第一次跑时没有，为 null。
@@ -1480,7 +1486,7 @@ async function assertAgentHealthy(crypto: AccountCrypto, spec: AccountFleetSpec)
  * / selectEgressForLogin 取代，所以这里只处理 pinned / none 两种简单 mode；
  * 走到 managed-node 分支说明调用方没主动选 egress，保留原"取第一个候选"行为。
  */
-function resolveLegacyEgressProxyUrl(repo: HiveRepository, spec: AccountFleetSpec): string {
+function resolveLegacyEgressProxyUrl(repo: HiveRepository, spec: AccountFleetSpec, config: RuntimeConfig): string {
   const mode = spec.codexTool.egress.mode;
   if (mode === "none") return "";
   if (mode === "pinned-node" && spec.codexTool.egress.pinnedNodeHash) {
@@ -1490,7 +1496,7 @@ function resolveLegacyEgressProxyUrl(repo: HiveRepository, spec: AccountFleetSpe
         `egress pinned node ${spec.codexTool.egress.pinnedNodeHash} not found or has no assigned port`
       );
     }
-    return `http://127.0.0.1:${node.assignedPort}`;
+    return buildProxyUrl({ protocol: "http", host: localProbeHost(config.listenHost), port: node.assignedPort, auth: config.proxyAuth });
   }
   // 兜底：第一个可用节点（保守，跟 P4 旧行为兼容）
   const candidates: ProxyNode[] = repo
@@ -1500,7 +1506,7 @@ function resolveLegacyEgressProxyUrl(repo: HiveRepository, spec: AccountFleetSpe
   if (!pick?.assignedPort) {
     throw new Error("no healthy + schedulable + ported node available for egress");
   }
-  return `http://127.0.0.1:${pick.assignedPort}`;
+  return buildProxyUrl({ protocol: "http", host: localProbeHost(config.listenHost), port: pick.assignedPort, auth: config.proxyAuth });
 }
 
 /**

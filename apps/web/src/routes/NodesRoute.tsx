@@ -32,6 +32,7 @@ export interface NodesRouteProps {
   setFilters: (next: NodeFilters) => void;
   sourceNames: Map<string, string>;
   importPreview: SubscriptionImportPreview | undefined;
+  importError: string | undefined;
   setImportPreview: (next: SubscriptionImportPreview | undefined) => void;
   deletePlan: NodeDeletionPlan | undefined;
   setDeletePlan: (next: NodeDeletionPlan | undefined) => void;
@@ -98,6 +99,7 @@ export function NodesRoute(props: NodesRouteProps) {
         importUrl={props.subscriptionUrl}
         importKeywords={props.subscriptionKeywords}
         preview={props.importPreview}
+        importError={props.importError}
         deletePlan={props.deletePlan}
         previewing={m.previewImport.isPending}
         importing={m.applyImport.isPending}

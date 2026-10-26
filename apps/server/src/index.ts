@@ -85,7 +85,7 @@ app.get("/api/exports/sub2api", async (c) => {
     return c.json({ error: "Unauthorized" }, 401);
   }
   const host = c.req.query("host") ?? config.exportHost;
-  return c.json(exportSub2Api(repo.listNodes(), { host }));
+  return c.json(exportSub2Api(repo.listNodes(), { ...config.proxyAuth, host }));
 });
 
 app.post("/api/exports/sub2api/download", async (c) => {
@@ -97,6 +97,7 @@ app.post("/api/exports/sub2api/download", async (c) => {
     return c.json({ error: "Invalid export request", issues: input.error.issues }, 400);
   }
   const payload = exportSub2Api(repo.listNodes(), {
+    ...config.proxyAuth,
     host: input.data.host ?? config.exportHost,
     selectedHashes: input.data.selectedHashes,
     failedNodeStatus: input.data.failedNodeStatus,
@@ -167,6 +168,8 @@ async function autoBootMihomo(): Promise<void> {
     console.log(`Mihomo config rendered on boot (${rendered.egressMap.length} listeners).`);
   } catch (error) {
     console.warn("Mihomo boot render skipped:", error instanceof Error ? error.message : error);
+    // Never start an old unauthenticated config after an authenticated render fails.
+    if (config.proxyAuth) return;
   }
   if (!existsSync(config.mihomoConfigPath)) {
     console.log(`Mihomo auto-boot skipped: no config at ${config.mihomoConfigPath}.`);

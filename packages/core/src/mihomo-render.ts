@@ -19,15 +19,15 @@ export interface RenderedMihomo {
 }
 
 /**
- * 外置 codex-tool agent 的出口配置。给定时,额外渲染一个**唯一对外**的鉴权 listener
+ * 外置 codex-tool agent 的出口配置。给定时,额外渲染一个独立鉴权 listener
  * (hive-codex),其上游绑到一个 `codex-egress` select 组(组里是全部节点 + DIRECT)。
  * 运行时 Hive 用 external-controller PUT /proxies/codex-egress 切换该组指向的节点,
- * 从而"单口 + 动态上游":对外只暴露一个鉴权端口,真实出口由 Hive 的选节点逻辑分发。
+ * 从而"单口 + 动态上游":该专用端口的真实出口由 Hive 的选节点逻辑分发。
  */
 export interface CodexEgressOptions {
   /** 对外监听端口(避开节点端口段)。 */
   port: number;
-  /** 该口的绑定地址(只有这一个口对 LAN 暴露;其余节点口仍绑 listenHost)。 */
+  /** 该专用口的绑定地址；普通节点口仍使用 listenHost 和统一入口账密。 */
   bindHost: string;
   /** 运行时随机生成的鉴权用户/密码(不落库),拼进 users 与下发给 agent 的代理 URL。 */
   user: string;
@@ -113,11 +113,11 @@ export function renderMihomoConfig(
     listen: config.listenHost,
     port: node.assignedPort,
     udp: true,
-    users: [],
+    users: config.proxyAuth ? [{ ...config.proxyAuth }] : [],
     proxy: proxyNameForNode(node)
   }));
 
-  // 外置 agent 出口:唯一对外鉴权口 + 可被 Hive 动态切上游的 select 组。
+  // 外置 agent 出口:独立鉴权口 + 可被 Hive 动态切上游的 select 组。
   const proxyGroups: Array<Record<string, unknown>> = [];
   if (codexEgress && codexEgress.port > 0) {
     listeners.push({
@@ -126,10 +126,10 @@ export function renderMihomoConfig(
       listen: codexEgress.bindHost,
       port: codexEgress.port,
       udp: true,
-      // 仅此口带鉴权。Mihomo listener 的 users 是 {username,password} 映射(非 "u:p" 字符串)。
+      // 专用入口保留独立凭据，不复用普通节点的统一账密。
       users: [{ username: codexEgress.user, password: codexEgress.pass }],
       proxy: CODEX_EGRESS_GROUP
-    } as unknown as (typeof listeners)[number]);
+    });
     proxyGroups.push({
       name: CODEX_EGRESS_GROUP,
       type: "select",

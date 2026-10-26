@@ -3,6 +3,24 @@ import { parseSubscription } from "./subscription.js";
 import { buildSubscriptionImportPreview, filteredExistingNodeHashes, filterPreviewImportableNodes } from "./subscription-preview.js";
 
 describe("buildSubscriptionImportPreview", () => {
+  it.each(["", "<html><body>login required</body></html>", '{"error":"expired"}', "proxies: []", "proxies: [broken"])(
+    "rejects unusable content rather than reporting a successful zero-node preview", (content) => {
+      expect(() => buildSubscriptionImportPreview({
+        source: { id: "source-1", name: "primary", kind: "url", value: "https://example.com/sub" },
+        content, existingNodes: []
+      })).toThrow();
+    }
+  );
+
+  it("supports Base64-encoded Clash YAML", () => {
+    const content = Buffer.from("proxies:\n  - name: JP\n    type: socks5\n    server: example.com\n    port: 1080\n").toString("base64");
+    const preview = buildSubscriptionImportPreview({
+      source: { id: "source-1", name: "primary", kind: "url", value: "https://example.com/sub" },
+      content, existingNodes: []
+    });
+    expect(preview.summary).toMatchObject({ total: 1, importable: 1 });
+  });
+
   it("classifies importable, filtered, duplicate and existing nodes before import", () => {
     const content = `
 proxies:

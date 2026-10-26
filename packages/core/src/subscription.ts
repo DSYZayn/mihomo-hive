@@ -6,6 +6,18 @@ import { proxyIdentityHash } from "./proxy-identity.js";
 
 type RawProxy = Record<string, unknown> & { name?: unknown; type?: unknown };
 
+export function parseSubscriptionOrThrow(content: string, sourceId: string): ProxyNode[] {
+  if (!content.trim()) throw new Error("订阅返回空内容，请检查链接是否过期或套餐是否有效。");
+  if (/^\s*(?:<!doctype\s+html|<html|<head|<body)/i.test(content)) {
+    throw new Error("订阅返回了网页而非节点配置，可能是登录页、验证页或错误页；请使用客户端订阅链接。");
+  }
+  const nodes = parseSubscription(content, sourceId);
+  if (nodes.length === 0) {
+    throw new Error("订阅内容中未识别到有效节点。请检查链接、订阅格式及客户端 User-Agent；支持 Clash/Mihomo YAML 和节点 URI 列表（含 Base64）。");
+  }
+  return nodes;
+}
+
 export function parseSubscription(content: string, sourceId: string): ProxyNode[] {
   const trimmed = content.trim();
   if (!trimmed) {
@@ -18,6 +30,10 @@ export function parseSubscription(content: string, sourceId: string): ProxyNode[
   }
 
   const decoded = decodeMaybeBase64(trimmed);
+  if (decoded !== trimmed) {
+    const decodedClashNodes = parseClashYaml(decoded, sourceId);
+    if (decodedClashNodes.length > 0) return decodedClashNodes;
+  }
   const lines = decoded
     .split(/\r?\n/)
     .map((line) => line.trim())

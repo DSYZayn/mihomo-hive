@@ -12,6 +12,7 @@ export function NodePoolPanel(props: {
   importUrl: string;
   importKeywords: string;
   preview: SubscriptionImportPreview | undefined;
+  importError: string | undefined;
   deletePlan: NodeDeletionPlan | undefined;
   previewing: boolean;
   importing: boolean;
@@ -73,6 +74,7 @@ export function NodePoolPanel(props: {
           <p className="muted small">
             过滤规则在预览弹窗中调整。"保存订阅源" 只保存配置不发起请求；"拉取并预览" 才会下载订阅内容。
           </p>
+          {props.importError ? <div className="form-error" role="alert">{props.importError}</div> : null}
           <div className="button-row">
             <Button
               variant="secondary"
@@ -168,6 +170,7 @@ export function NodePoolPanel(props: {
       {props.preview ? (
         <ImportPreviewDialog
           preview={props.preview}
+          importError={props.importError}
           initialKeywords={parseKeywords(props.importKeywords)}
           previewing={props.previewing}
           importing={props.importing}
@@ -185,6 +188,7 @@ export function NodePoolPanel(props: {
 
 function ImportPreviewDialog(props: {
   preview: SubscriptionImportPreview;
+  importError: string | undefined;
   initialKeywords: string[];
   previewing: boolean;
   importing: boolean;
@@ -216,6 +220,7 @@ function ImportPreviewDialog(props: {
     <div className="dialog-backdrop" role="presentation">
       <section className="dialog wide" role="dialog" aria-modal="true">
         <h2>订阅导入预览</h2>
+        {props.importError ? <div className="form-error" role="alert">{props.importError}</div> : null}
         <p>
           共解析 {props.preview.summary.total} 个节点，可导入/更新 {props.preview.summary.importable} 个，过滤{" "}
           {props.preview.summary.filtered} 个，其中会从现有节点池删除 {props.preview.summary.deletedByFilter} 个，重复 {props.preview.summary.duplicates} 个。
@@ -291,7 +296,7 @@ function ImportPreviewDialog(props: {
           <Button variant="secondary" onClick={props.onClose}>取消</Button>
           <Button
             loading={props.importing}
-            disabled={props.preview.summary.importable === 0 && props.preview.summary.deletedByFilter === 0}
+            disabled={props.previewing || Boolean(props.importError) || (props.preview.summary.importable === 0 && props.preview.summary.deletedByFilter === 0)}
             onClick={() => props.onApply(keywords)}
           >
             重新导入这些节点

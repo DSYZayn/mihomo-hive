@@ -10,6 +10,15 @@ services:
       HIVE_DATA_DIR: "/data"
       HIVE_GENERATED_DIR: "/data/generated"
       HIVE_CONFIG: "/data/hive.config.json"
+      HIVE_LISTEN_HOST: "${HIVE_LISTEN_HOST:-}"
+      HIVE_EXPORT_HOST: "${HIVE_EXPORT_HOST:-}"
+      HIVE_PROXY_USERNAME: "${HIVE_PROXY_USERNAME:-}"
+      HIVE_PROXY_PASSWORD: "${HIVE_PROXY_PASSWORD:-}"
+      HIVE_SUBSCRIPTION_USER_AGENT: "${HIVE_SUBSCRIPTION_USER_AGENT:-}"
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      ALL_PROXY: "${ALL_PROXY:-}"
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,::1}"
       MIHOMO_BIN: "/usr/local/bin/mihomo"
     volumes:
       - ./runtime:/data

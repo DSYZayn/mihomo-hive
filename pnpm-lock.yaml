@@ -195,6 +195,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@mihomo-hive/core':
+        specifier: workspace:*
+        version: link:../core
       '@mihomo-hive/schemas':
         specifier: workspace:*
         version: link:../schemas

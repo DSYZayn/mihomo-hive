@@ -449,6 +449,7 @@ async function runActiveProbeRound(
     if (node.kind === "chain") {
       const target = resolveProxyTestTargets(["openai"])[0]!;
       const chainResult = await testProxyTarget({
+        auth: config.proxyAuth,
         host: listenerHost,
         port: Number(node.assignedPort),
         target,
@@ -750,6 +751,7 @@ async function checkAndPersistNodeHealth(repo: HiveRepository, config: RuntimeCo
     }
     const target = resolveProxyTestTargets(["openai"])[0]!;
     const upstreamResult = await testProxyTarget({
+      auth: config.proxyAuth,
       host: localProbeHost(config.listenHost),
       port: Number(node.assignedPort),
       target,
@@ -793,6 +795,7 @@ async function pushHealthyNodes(repo: HiveRepository, config: RuntimeConfig): Pr
 
   const nodes = repo.listNodes();
   const payload = buildSub2ApiExport(nodes, {
+    ...config.proxyAuth,
     host: config.exportHost,
     namePrefix: connection.managedProxyPrefix,
     selectedHashes: nodes
@@ -813,7 +816,7 @@ async function pushHealthyNodes(repo: HiveRepository, config: RuntimeConfig): Pr
   const client = createSub2ApiClient(connection);
   await client.importProxyData({ proxies });
   const liveProxies = await client.listAllProxies();
-  const mappings = mapLocalNodesToSub2ApiProxies({ nodes: repo.listNodes(), proxies: liveProxies, exportHost: config.exportHost });
+  const mappings = mapLocalNodesToSub2ApiProxies({ nodes: repo.listNodes(), proxies: liveProxies, proxyAuth: config.proxyAuth, exportHost: config.exportHost });
   repo.updateSub2ApiProxyMappings(mappings);
   return { pushedNodes: proxies.length, mappedNodes: mappings.length };
 }

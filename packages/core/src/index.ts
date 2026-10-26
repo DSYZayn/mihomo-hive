@@ -18,6 +18,8 @@ export * from "./sub2api-client.js";
 export * from "./strategy-switch.js";
 export * from "./sub2api-maintenance.js";
 export * from "./subscription.js";
+export * from "./subscription-fetch.js";
 export * from "./subscription-preview.js";
 export * from "./proxy-identity.js";
 export * from "./proxy-chain.js";
+export * from "./proxy-access.js";

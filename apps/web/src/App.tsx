@@ -108,6 +108,7 @@ function Dashboard(props: { onLogout: () => void }) {
   const theme = useTheme();
   const [downloading, setDownloading] = React.useState(false);
   const [importPreview, setImportPreview] = React.useState<SubscriptionImportPreview | undefined>();
+  const [importError, setImportError] = React.useState<string | undefined>();
   const [deletePlan, setDeletePlan] = React.useState<NodeDeletionPlan | undefined>();
 
   React.useEffect(() => {
@@ -196,21 +197,33 @@ function Dashboard(props: { onLogout: () => void }) {
     onError: (error) => failTask(setTask, pushToast, "订阅添加失败", error.message)
   });
   const previewImport = trpc.subscriptions.previewImport.useMutation({
-    onMutate: () => startTask(setTask, "正在拉取并预览订阅", "系统会先展示将导入、过滤和重复的节点。"),
+    onMutate: () => {
+      setImportError(undefined);
+      startTask(setTask, "正在拉取并预览订阅", "系统会先展示将导入、过滤和重复的节点。");
+    },
     onSuccess: async (result) => {
       setImportPreview(result);
       await finishTask(setTask, pushToast, "订阅预览完成", `解析 ${result.summary.total} 个节点，可导入 ${result.summary.importable} 个。`);
     },
-    onError: (error) => failTask(setTask, pushToast, "订阅预览失败", error.message)
+    onError: (error) => {
+      setImportError(error.message);
+      failTask(setTask, pushToast, "订阅预览失败", error.message);
+    }
   });
   const applyImportPreview = trpc.subscriptions.applyImport.useMutation({
-    onMutate: () => startTask(setTask, "正在导入预览结果", "只会导入预览中标记为导入或更新的节点。"),
+    onMutate: () => {
+      setImportError(undefined);
+      startTask(setTask, "正在导入预览结果", "只会导入预览中标记为导入或更新的节点。");
+    },
     onSuccess: async (result) => {
       setImportPreview(undefined);
       await finishTask(setTask, pushToast, "节点已重新导入", `导入或更新 ${result.imported} 个节点，按过滤规则删除 ${result.deletedByFilter} 个旧节点。`);
       await refreshOperationalData();
     },
-    onError: (error) => failTask(setTask, pushToast, "节点导入失败", error.message)
+    onError: (error) => {
+      setImportError(error.message);
+      failTask(setTask, pushToast, "节点导入失败", error.message);
+    }
   });
   const deleteSubscription = trpc.subscriptions.delete.useMutation({
     onMutate: () => startTask(setTask, "正在删除订阅", "会同时删除该订阅导入的节点。"),
@@ -539,6 +552,7 @@ function Dashboard(props: { onLogout: () => void }) {
           setFilters={setFilters}
           sourceNames={sourceNames}
           importPreview={importPreview}
+          importError={importError}
           setImportPreview={setImportPreview}
           deletePlan={deletePlan}
           setDeletePlan={setDeletePlan}

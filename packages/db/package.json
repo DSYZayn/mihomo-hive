@@ -11,6 +11,7 @@
     "test": "vitest run --passWithNoTests --config ../../vitest.config.ts"
   },
   "dependencies": {
+    "@mihomo-hive/core": "workspace:*",
     "@mihomo-hive/schemas": "workspace:*",
     "better-sqlite3": "^11.10.0",
     "drizzle-orm": "^0.43.1"

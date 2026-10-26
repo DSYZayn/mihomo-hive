@@ -1,9 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { defaultRuntimeConfig, type ProxyNode } from "@mihomo-hive/schemas";
+import { defaultRuntimeConfig, proxyNodeSchema, type ProxyNode } from "@mihomo-hive/schemas";
 import { proxyNameForNode, renderMihomoConfig } from "./mihomo-render.js";
+import { createChainProxyNode } from "./proxy-chain.js";
 
 describe("renderMihomoConfig", () => {
+  it("requires shared credentials on direct and chain listeners without changing upstream credentials", () => {
+    const nodes = [10001, 10002].map((port) => proxyNodeSchema.parse({
+      hash: `hash-${port}`, sourceId: "test", name: `node-${port}`, originalName: `node-${port}`,
+      type: "socks5", assignedPort: port,
+      raw: { type: "socks5", server: "upstream.example.com", port: 1080, username: "upstream", password: "upstream-password" },
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z"
+    }));
+    nodes.push({ ...createChainProxyNode({ front: nodes[0]!, target: nodes[1]! }), assignedPort: 10003 });
+    const proxyAuth = { username: "hive", password: "shared-password" };
+    const doc = parse(renderMihomoConfig(nodes, { ...defaultRuntimeConfig, proxyAuth }, {
+      port: 11000, bindHost: "127.0.0.1", user: "dedicated", pass: "dedicated-password"
+    }).yaml);
+    expect(doc.listeners.slice(0, 3).map((listener: { users: unknown }) => listener.users)).toEqual([
+      [proxyAuth], [proxyAuth], [proxyAuth]
+    ]);
+    expect(doc.listeners[3].users).toEqual([{ username: "dedicated", password: "dedicated-password" }]);
+    for (const proxy of doc.proxies) expect(proxy).toMatchObject({ username: "upstream", password: "upstream-password" });
+    const withoutAuth = parse(renderMihomoConfig(nodes, defaultRuntimeConfig).yaml);
+    for (const listener of withoutAuth.listeners) expect(listener.users).toEqual([]);
+  });
+
   it("renders 300 fixed mixed listeners", () => {
     const nodes = Array.from({ length: 300 }, (_, index): ProxyNode => {
       const port = 10001 + index;

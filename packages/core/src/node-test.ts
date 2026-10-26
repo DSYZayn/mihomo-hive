@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import net from "node:net";
 import { promisify } from "node:util";
+import type { ProxyAuth } from "@mihomo-hive/schemas";
+import { buildProxyUrl } from "./proxy-access.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,6 +102,7 @@ export function resolveProxyTestTargets(ids: string[]): ProxyTestTarget[] {
 export async function testProxyTarget(input: {
   host: string;
   port: number;
+  auth?: ProxyAuth | undefined;
   target: ProxyTestTarget;
   timeoutMs: number;
 }): Promise<ProxyTargetTestResult> {
@@ -114,11 +117,13 @@ export async function testProxyTarget(input: {
         "--max-time",
         String(maxTimeSeconds),
         "-o",
-        "/dev/null",
+        process.platform === "win32" ? "NUL" : "/dev/null",
         "-w",
         "%{http_code}",
+        "--noproxy",
+        "",
         "-x",
-        `socks5h://${input.host}:${input.port}`,
+        buildProxyUrl({ ...input, protocol: "socks5h" }),
         input.target.url
       ],
       { timeout: input.timeoutMs + 1000 }

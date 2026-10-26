@@ -24,6 +24,20 @@ describe("node deletion plans", () => {
       })
     ).toEqual([{ hash: "hash-0001", proxyId: 7 }]);
   });
+
+  it("matches the complete authenticated connection rather than a stale proxy on the same port", () => {
+    const proxyAuth = { username: "hive", password: "secret" };
+    const proxies = [
+      proxy(1, 10001),
+      { ...proxy(2, 10001), ...proxyAuth, password: "old" },
+      { ...proxy(3, 10001), ...proxyAuth, protocol: "http" },
+      { ...proxy(4, 10001), ...proxyAuth }
+    ];
+    const input = { nodes: [node("hash-0001", 10001)], proxies, exportHost: "127.0.0.1", proxyAuth };
+    expect(mapLocalNodesToSub2ApiProxies(input)).toEqual([{ hash: "hash-0001", proxyId: 4 }]);
+    expect(mapLocalNodesToSub2ApiProxies({ ...input, proxies: proxies.slice(0, 3) })).toEqual([]);
+    expect(mapLocalNodesToSub2ApiProxies({ ...input, proxyAuth: undefined })).toEqual([{ hash: "hash-0001", proxyId: 1 }]);
+  });
 });
 
 function node(hash: string, assignedPort: number): ProxyNode {

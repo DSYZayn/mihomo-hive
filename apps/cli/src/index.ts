@@ -200,6 +200,7 @@ nodes
       for (const target of targets) {
         results.push(
           await testProxyTarget({
+            auth: config.proxyAuth,
             host,
             port: Number(node.assignedPort),
             target,
@@ -345,6 +346,7 @@ exportCommand
   .action(async (options) => {
     const { config, repo } = await openRepo();
     const payload = exportSub2Api(repo.listNodes(), {
+      ...config.proxyAuth,
       host: options.host ?? config.exportHost,
       failedNodeStatus: options.failedNodeStatus
     });

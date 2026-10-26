@@ -19,6 +19,7 @@ export default defineConfig({
   reporter: [["list"]],
   use: {
     baseURL,
+    ...(process.env.HIVE_E2E_CHANNEL ? { channel: process.env.HIVE_E2E_CHANNEL } : {}),
     trace: "retain-on-failure",
     actionTimeout: 10_000,
     navigationTimeout: 15_000

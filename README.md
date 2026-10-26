@@ -109,6 +109,47 @@ environment:
   HIVE_PORT: 9991
 ```
 
+### 代理入口账密与跨主机访问
+
+所有节点端口（包括链式节点）可以共用一套用户名、密码。使用仓库的 `docker-compose.yml` 时，在同目录 `.env` 中设置：
+
+```dotenv
+HIVE_PROXY_USERNAME=hive
+HIVE_PROXY_PASSWORD='replace-with-a-strong-password'
+HIVE_LISTEN_HOST=0.0.0.0
+HIVE_EXPORT_HOST=proxy.example.com
+```
+
+`HIVE_LISTEN_HOST` 是代理端口的监听地址；`HIVE_EXPORT_HOST` 是 Sub2API 能访问的服务器 IP 或域名，不能填写 `0.0.0.0`。这两项留空时沿用 `hive.config.json`，默认均为 `127.0.0.1`。`HIVE_HOST` / `HIVE_PORT` 只控制管理面板。
+
+如果自行编写 Compose 文件，需要在服务的 `environment` 中显式传入以上四项；仅创建 `.env` 不会自动把变量传进容器。更改后执行 `docker compose up -d --force-recreate`，启动时会重新生成节点监听配置。
+
+用户名、密码必须同时设置，两项都为空时保留原来的无认证模式。凭据最多各 255 个 UTF-8 字节，不接受控制字符或 `|`，用户名也不接受 `:`。密码含 `$` 或 `#` 时，在 `.env` 中使用单引号保留原文。
+
+启用后，节点测试、下载的 Sub2API JSON、手动推送和后台同步均携带相同账密；`proxy_key` 仍为 `protocol|host|port|username|password`。入口账密与订阅中上游节点的账密、管理面板登录密码相互独立。凭据不会写回 `hive.config.json`，但运行所需的 Mihomo YAML 和导出 JSON 包含凭据，应按敏感配置保管。
+
+首次给已有部署启用认证或修改账密，会改变 Sub2API 的代理身份键，重新推送会创建或复用新凭据对应的代理记录；已有账号仍绑定旧记录，需在 Sub2API 中显式调整，Hive 不会自动迁移账号。新部署建议在首次推送前配置好账密。
+
+SOCKS5 账密提供访问认证，本身不加密传输。公网跨主机连接需要传输保密时，应另配加密隧道；也可通过防火墙限制代理端口只允许指定客户端 IP 访问。
+
+### 通过代理拉取订阅
+
+Docker daemon 的代理用于 Docker 自身访问镜像仓库，不会自动使容器内的订阅下载走代理。使用仓库 Compose 文件时，在同目录 `.env` 显式配置容器的出站代理，例如：
+
+```dotenv
+HTTP_PROXY=http://127.0.0.1:7890
+HTTPS_PROXY=http://127.0.0.1:7890
+NO_PROXY=localhost,127.0.0.1,::1
+```
+
+这里的 `HTTPS_PROXY` 表示访问 HTTPS 订阅时使用哪个代理，其值仍可为 `http://` 代理地址。若使用 SOCKS5，可将上述两项留空并配置 `ALL_PROXY=socks5h://127.0.0.1:1080`，由代理解析订阅域名。`HTTP_PROXY` / `HTTPS_PROXY` 优先于 `ALL_PROXY`，`NO_PROXY` 中匹配的目标直连。订阅下载也兼容对应的小写环境变量；自行编写 Compose 文件时应显式传入这些变量。
+
+本项目使用 `network_mode: host`，示例中的 `127.0.0.1` 指部署主机；请替换为实际代理地址。修改后执行 `docker compose up -d --force-recreate`。这是订阅下载的出站代理，与 `HIVE_PROXY_USERNAME` / `HIVE_PROXY_PASSWORD` 控制的节点入口认证用途不同，不改变固定节点的出口路由。
+
+订阅请求最多等待 30 秒、跟随 5 次 HTTP(S) 重定向、接收 10 MiB 内容。网络超时、HTTP 401/403/407 等失败会显示具体原因；空内容、HTML 验证页或未识别到节点的内容会提示失败，不会覆盖已保存的订阅内容或节点。导入表单和预览弹窗中的错误提示会保留到下一次重试。
+
+代理不能修复过期链接、服务端鉴权失败或不兼容的订阅格式。若服务商按客户端标识返回内容，可通过 `HIVE_SUBSCRIPTION_USER_AGENT` 设置其要求的 User-Agent，默认 `Clash.Meta`。
+
 ---
 
 ## Web UI 工作区

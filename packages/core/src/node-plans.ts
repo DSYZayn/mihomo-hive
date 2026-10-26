@@ -1,6 +1,7 @@
 import {
   nodeDeletionPlanSchema,
   type NodeDeletionPlan,
+  type ProxyAuth,
   type ProxyNode,
   type Sub2ApiAccountRecord,
   type Sub2ApiProxyRecord
@@ -60,13 +61,18 @@ export function mapLocalNodesToSub2ApiProxies(input: {
   nodes: ProxyNode[];
   proxies: Sub2ApiProxyRecord[];
   exportHost: string;
+  proxyAuth?: ProxyAuth | undefined;
 }): Array<{ hash: string; proxyId: number }> {
   const mappings: Array<{ hash: string; proxyId: number }> = [];
   for (const node of input.nodes) {
     if (!node.assignedPort) {
       continue;
     }
-    const proxy = input.proxies.find((item) => item.host === input.exportHost && item.port === node.assignedPort);
+    const proxy = input.proxies.find((item) =>
+      item.protocol === "socks5" && item.host === input.exportHost && item.port === node.assignedPort &&
+      (item.username ?? "") === (input.proxyAuth?.username ?? "") &&
+      (item.password ?? "") === (input.proxyAuth?.password ?? "")
+    );
     if (proxy) {
       mappings.push({ hash: node.hash, proxyId: proxy.id });
     }
