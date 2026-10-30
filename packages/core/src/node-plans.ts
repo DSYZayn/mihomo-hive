@@ -49,6 +49,7 @@ export function buildNodeDeletionPlan(input: {
     blockingAccounts,
     requiresDrain,
     canDeleteNow: !requiresDrain && input.nodes.every((node) => !node.protected),
+    remoteStatus: "available",
     message: requiresDrain
       ? `有 ${blockingAccounts.length} 个 Sub2API 账号仍绑定到这些节点，需要先排空。`
       : input.nodes.some((node) => node.protected)

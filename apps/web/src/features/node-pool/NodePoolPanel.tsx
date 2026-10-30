@@ -313,7 +313,12 @@ function DeletePlanDialog(props: { plan: NodeDeletionPlan; onClose: () => void; 
       <section className="dialog wide" role="dialog" aria-modal="true">
         <h2>节点删除计划</h2>
         <p>{props.plan.message}</p>
-        {props.plan.blockingAccounts.length > 0 ? (
+        {props.plan.remoteStatus === "unavailable" ? (
+          <div className="warning-box">
+            <AlertTriangle size={18} />
+            <span>Sub2API 状态当前不可用或未配置，账号关联未知。本次只执行本地删除，不会等待远端清理。</span>
+          </div>
+        ) : props.plan.blockingAccounts.length > 0 ? (
           <div className="warning-box">
             <AlertTriangle size={18} />
             <span>仍有 {props.plan.blockingAccounts.length} 个账号绑定到这些代理。请先在 Sub2API 侧完成迁移，再删除节点。</span>
@@ -326,7 +331,9 @@ function DeletePlanDialog(props: { plan: NodeDeletionPlan; onClose: () => void; 
         )}
         <footer>
           <Button variant="secondary" onClick={props.onClose}>关闭</Button>
-          <Button variant="danger" disabled={!props.plan.canDeleteNow} onClick={props.onForceLocal}>确认删除</Button>
+          <Button variant="danger" disabled={!props.plan.canDeleteNow} onClick={props.onForceLocal}>
+            {props.plan.remoteStatus === "unavailable" ? "确认本地删除" : "确认删除"}
+          </Button>
         </footer>
       </section>
     </div>

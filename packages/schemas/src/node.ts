@@ -568,6 +568,7 @@ export const nodeDeletionPlanSchema = z.object({
   ),
   canDeleteNow: z.boolean(),
   requiresDrain: z.boolean(),
+  remoteStatus: z.enum(["available", "unavailable"]).optional(),
   message: z.string()
 });
 

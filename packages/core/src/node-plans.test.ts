@@ -12,6 +12,7 @@ describe("node deletion plans", () => {
 
     expect(plan.canDeleteNow).toBe(false);
     expect(plan.requiresDrain).toBe(true);
+    expect(plan.remoteStatus).toBe("available");
     expect(plan.blockingAccounts.map((item) => item.id)).toEqual([99]);
   });
 

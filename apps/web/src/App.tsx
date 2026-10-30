@@ -246,7 +246,14 @@ function Dashboard(props: { onLogout: () => void }) {
     onSuccess: async (result) => {
       setDeletePlan(undefined);
       mutateSelection(() => new Set());
-      await finishTask(setTask, pushToast, "节点已删除", `删除 ${result.deleted} 个节点。`);
+      await finishTask(
+        setTask,
+        pushToast,
+        "节点已删除",
+        result.sub2apiCleanupError
+          ? `本地删除 ${result.deleted} 个节点；Sub2API 清理已跳过：${result.sub2apiCleanupError}`
+          : `删除 ${result.deleted} 个节点。`
+      );
       await refreshOperationalData();
     },
     onError: (error) => failTask(setTask, pushToast, "节点删除失败", error.message)

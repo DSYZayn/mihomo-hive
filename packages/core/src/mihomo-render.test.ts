@@ -141,7 +141,10 @@ describe("renderMihomoConfig", () => {
       assignedPort: 10002
     };
     const rendered = renderMihomoConfig([front, target, chain], defaultRuntimeConfig);
-    const document = parse(rendered.yaml) as { proxies: Array<Record<string, unknown>> };
+    const document = parse(rendered.yaml) as {
+      proxies: Array<Record<string, unknown>>;
+      listeners: Array<Record<string, unknown>>;
+    };
     const chainProxy = document.proxies.find((proxy) => proxy.name === proxyNameForNode(chain));
     expect(chainProxy).toMatchObject({
       server: "current-target.example.com",
@@ -149,6 +152,9 @@ describe("renderMihomoConfig", () => {
       password: "current-secret",
       "dialer-proxy": proxyNameForNode(front)
     });
+    expect(rendered.yaml).toContain(`dialer-proxy: "${proxyNameForNode(front)}"`);
+    const proxyNames = new Set(document.proxies.map((proxy) => proxy.name));
+    expect(document.listeners.every((listener) => proxyNames.has(listener.proxy))).toBe(true);
     expect(chainProxy).not.toHaveProperty("__hiveChain");
   });
 
@@ -465,6 +471,40 @@ describe("renderMihomoConfig", () => {
     const chainProxy = document.proxies.find((proxy) => proxy.name === proxyNameForNode(chain));
     expect(chainProxy?.["dialer-proxy"]).toBe(proxyNameForNode(front));
     expect(chainProxy?.["dialer-proxy"]).not.toBe("provider-internal-upstream");
+  });
+
+  it("removes source-only dialer-proxy references from ordinary imported nodes", () => {
+    const node: ProxyNode = {
+      hash: "direct-stale000",
+      sourceId: "sample",
+      name: "imported",
+      originalName: "imported",
+      type: "ss",
+      region: "unknown",
+      raw: {
+        type: "ss",
+        server: "node.example.com",
+        port: 443,
+        cipher: "aes-128-gcm",
+        password: "secret",
+        "dialer-proxy": "source-only-group"
+      },
+      status: "active",
+      lifecycleStatus: "schedulable",
+      schedulable: true,
+      protected: false,
+      assignedPort: 10001,
+      codexLoginSuccess: 0,
+      codexLoginFailure: 0,
+      codexReserved: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+
+    const document = parse(renderMihomoConfig([node], defaultRuntimeConfig).yaml) as {
+      proxies: Array<Record<string, unknown>>;
+    };
+    expect(document.proxies[0]).not.toHaveProperty("dialer-proxy");
   });
 });
 

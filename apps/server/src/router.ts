@@ -447,8 +447,18 @@ export const appRouter = t.router({
     previewDelete: protectedProcedure.input(z.object({ hashes: z.array(z.string().min(8)).min(1) })).query(async ({ ctx, input }) => {
       const hashes = uniqueHashes(input.hashes);
       const nodes = selectNodes(ctx.repo.listNodes(), hashes);
-      const snapshot = await loadSub2ApiSnapshot(ctx.repo);
-      return buildNodeDeletionPlan({ nodes, proxies: snapshot.proxies, accounts: snapshot.accounts, exportHost: ctx.config.exportHost });
+      if (!ctx.repo.getSub2ApiConnection()) {
+        return buildLocalOnlyNodeDeletionPlan(nodes, "未配置 Sub2API，将跳过远端清理，仅删除本地节点。");
+      }
+      try {
+        const snapshot = await loadSub2ApiSnapshot(ctx.repo);
+        return buildNodeDeletionPlan({ nodes, proxies: snapshot.proxies, accounts: snapshot.accounts, exportHost: ctx.config.exportHost });
+      } catch (error) {
+        // 删除本地节点不能被 Sub2API 的控制面可用性绑死。尤其是 admin
+        // key 过期时，预览仍要给出可执行的本地删除计划；远端残留由用户
+        // 修复凭据后再同步清理。
+        return buildLocalOnlyNodeDeletionPlan(nodes, `Sub2API 当前不可访问（${error instanceof Error ? error.message : "未知错误"}），将跳过远端清理，仅删除本地节点。`);
+      }
     }),
     applyDelete: protectedProcedure
       .input(
@@ -469,7 +479,11 @@ export const appRouter = t.router({
         const job = createJob(
           "nodes.delete",
           "正在删除节点",
-          client ? "先解绑 Sub2API 账号，再删除远端代理，最后删除本地节点。" : "未配置 Sub2API，仅删除本地节点。",
+          client
+            ? "先解绑 Sub2API 账号，再删除远端代理，最后删除本地节点。"
+            : connection && input.forceLocal
+              ? "已选择仅删除本地节点，跳过 Sub2API 远端清理。"
+              : "未配置 Sub2API，仅删除本地节点。",
           client ? ["读取 Sub2API 关联", "解绑账号", "删除 Sub2API 代理", "删除本地节点"] : ["删除本地节点"]
         );
         try {
@@ -478,56 +492,70 @@ export const appRouter = t.router({
             blockingAccounts: [],
             canDeleteNow: true,
             requiresDrain: false,
-            message: client ? "已重新读取 Sub2API 关联。" : "未配置 Sub2API，跳过远端清理。"
+            remoteStatus: client ? "available" : "unavailable",
+            message: client
+              ? "已重新读取 Sub2API 关联。"
+              : connection && input.forceLocal
+                ? "已选择仅删除本地节点，跳过远端清理。"
+                : "未配置 Sub2API，跳过远端清理。"
           });
           let unboundAccounts = 0;
           let deletedSub2ApiProxies = 0;
           const failedSub2ApiDeletes: Array<{ proxyId: number; name: string; message: string }> = [];
+          let sub2apiCleanupError: string | null = null;
 
           if (client) {
-            updateJobStep(job.id, 0, "running", "读取 Sub2API 代理与账号。");
-            const [proxies, accounts] = await Promise.all([
-              client.listAllProxies(),
-              client.listAllAccounts(sub2ApiAccountFiltersSchema.parse({ status: "" }))
-            ]);
-            plan = buildNodeDeletionPlan({ nodes, proxies, accounts, exportHost: ctx.config.exportHost });
-            const mappings = mapLocalNodesToSub2ApiProxies({ nodes, proxies, proxyAuth: ctx.config.proxyAuth, exportHost: ctx.config.exportHost });
-            const proxyNames = new Map(proxies.map((proxy) => [proxy.id, proxy.name]));
-            updateJobStep(job.id, 0, "success", `匹配到 ${mappings.length} 个 Sub2API 代理。`);
+            try {
+              updateJobStep(job.id, 0, "running", "读取 Sub2API 代理与账号。");
+              const [proxies, accounts] = await Promise.all([
+                client.listAllProxies(),
+                client.listAllAccounts(sub2ApiAccountFiltersSchema.parse({ status: "" }))
+              ]);
+              plan = buildNodeDeletionPlan({ nodes, proxies, accounts, exportHost: ctx.config.exportHost });
+              const mappings = mapLocalNodesToSub2ApiProxies({ nodes, proxies, proxyAuth: ctx.config.proxyAuth, exportHost: ctx.config.exportHost });
+              const proxyNames = new Map(proxies.map((proxy) => [proxy.id, proxy.name]));
+              updateJobStep(job.id, 0, "success", `匹配到 ${mappings.length} 个 Sub2API 代理。`);
 
-            updateJobStep(job.id, 1, "running", "查询每个代理 live 绑定账号并解绑。");
-            const accountIdsToUnbind = new Set<number>();
-            for (const mapping of mappings) {
-              const bound = await client.listProxyAccounts(mapping.proxyId);
-              for (const account of bound) {
-                accountIdsToUnbind.add(account.id);
+              updateJobStep(job.id, 1, "running", "查询每个代理 live 绑定账号并解绑。");
+              const accountIdsToUnbind = new Set<number>();
+              for (const mapping of mappings) {
+                const bound = await client.listProxyAccounts(mapping.proxyId);
+                for (const account of bound) {
+                  accountIdsToUnbind.add(account.id);
+                }
               }
-            }
-            if (accountIdsToUnbind.size > 0) {
-              const result = await client.clearAccountProxy(Array.from(accountIdsToUnbind));
-              unboundAccounts = result.success;
-            }
-            updateJobStep(job.id, 1, "success", `解绑 ${unboundAccounts} 个账号。`);
+              if (accountIdsToUnbind.size > 0) {
+                const result = await client.clearAccountProxy(Array.from(accountIdsToUnbind));
+                unboundAccounts = result.success;
+              }
+              updateJobStep(job.id, 1, "success", `解绑 ${unboundAccounts} 个账号。`);
 
-            updateJobStep(job.id, 2, "running", "删除 Sub2API 代理。");
-            for (const mapping of mappings) {
-              try {
-                await client.deleteProxy(mapping.proxyId);
-                deletedSub2ApiProxies += 1;
-              } catch (error) {
-                failedSub2ApiDeletes.push({
-                  proxyId: mapping.proxyId,
-                  name: proxyNames.get(mapping.proxyId) ?? `proxy-${mapping.proxyId}`,
-                  message: error instanceof Error ? error.message : "未知错误"
-                });
+              updateJobStep(job.id, 2, "running", "删除 Sub2API 代理。");
+              for (const mapping of mappings) {
+                try {
+                  await client.deleteProxy(mapping.proxyId);
+                  deletedSub2ApiProxies += 1;
+                } catch (error) {
+                  failedSub2ApiDeletes.push({
+                    proxyId: mapping.proxyId,
+                    name: proxyNames.get(mapping.proxyId) ?? `proxy-${mapping.proxyId}`,
+                    message: error instanceof Error ? error.message : "未知错误"
+                  });
+                }
               }
+              updateJobStep(
+                job.id,
+                2,
+                failedSub2ApiDeletes.length === 0 ? "success" : "failed",
+                `删除 ${deletedSub2ApiProxies} 个代理，失败 ${failedSub2ApiDeletes.length} 个。`
+              );
+            } catch (error) {
+              sub2apiCleanupError = error instanceof Error ? error.message : "未知错误";
+              plan = buildLocalOnlyNodeDeletionPlan(nodes, `Sub2API 清理已跳过（${sub2apiCleanupError}），仅删除本地节点。`);
+              updateJobStep(job.id, 0, "failed", `Sub2API 不可用，跳过远端清理：${sub2apiCleanupError}`);
+              updateJobStep(job.id, 1, "failed", "未执行账号解绑。");
+              updateJobStep(job.id, 2, "failed", "未执行远端代理删除。");
             }
-            updateJobStep(
-              job.id,
-              2,
-              failedSub2ApiDeletes.length === 0 ? "success" : "failed",
-              `删除 ${deletedSub2ApiProxies} 个代理，失败 ${failedSub2ApiDeletes.length} 个。`
-            );
           }
 
           const localStepIndex = client ? 3 : 0;
@@ -535,12 +563,14 @@ export const appRouter = t.router({
           const deleted = ctx.repo.deleteNodes(hashes);
           updateJobStep(job.id, localStepIndex, "success", `删除 ${deleted} 个本地节点。`);
 
-          const overallStatus = failedSub2ApiDeletes.length === 0 ? "success" : "failed";
+          // 本地删除是用户明确请求的主操作。Sub2API admin key 失效、网络
+          // 不可达或单个远端删除失败都只形成可追溯警告，不能回滚或阻止本地删除。
+          const overallStatus = "success" as const;
           finishJob(
             job.id,
             overallStatus,
             client
-              ? `本地删除 ${deleted}，远端解绑 ${unboundAccounts} 个账号，远端删除 ${deletedSub2ApiProxies}/${deletedSub2ApiProxies + failedSub2ApiDeletes.length} 个代理。`
+              ? `本地删除 ${deleted}，远端解绑 ${unboundAccounts} 个账号，远端删除 ${deletedSub2ApiProxies}/${deletedSub2ApiProxies + failedSub2ApiDeletes.length} 个代理。${sub2apiCleanupError ? ` Sub2API 清理警告：${sub2apiCleanupError}` : ""}`
               : `本地删除 ${deleted} 个节点。`
           );
 
@@ -550,6 +580,7 @@ export const appRouter = t.router({
             unboundAccounts,
             deletedSub2ApiProxies,
             failedSub2ApiDeletes,
+            ...(sub2apiCleanupError ? { sub2apiCleanupError } : {}),
             plan
           };
         } catch (error) {
@@ -2030,6 +2061,18 @@ function selectNodes(nodes: ProxyNode[], hashes: string[]): ProxyNode[] {
 
 function uniqueHashes(hashes: string[]): string[] {
   return Array.from(new Set(hashes));
+}
+
+function buildLocalOnlyNodeDeletionPlan(nodes: ProxyNode[], reason: string): NodeDeletionPlan {
+  const canDeleteNow = nodes.every((node) => !node.protected);
+  return nodeDeletionPlanSchema.parse({
+    nodes,
+    blockingAccounts: [],
+    canDeleteNow,
+    requiresDrain: false,
+    remoteStatus: "unavailable",
+    message: canDeleteNow ? reason : "包含受保护节点，请先解除保护。"
+  });
 }
 
 function assertNoChainDependencies(allNodes: ProxyNode[], hashes: string[]): void {

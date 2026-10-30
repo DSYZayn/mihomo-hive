@@ -1,4 +1,4 @@
-import { stringify } from "yaml";
+import { Scalar, stringify } from "yaml";
 import type { ProxyNode, RuntimeConfig } from "@mihomo-hive/schemas";
 import { parseProxyUri } from "./subscription.js";
 
@@ -86,13 +86,24 @@ export function renderMihomoConfig(
       // 链式记录只保存节点关系；每次都从最后出口的当前定义渲染，避免订阅刷新后
       // 仍使用旧凭据或旧传输参数。
       const raw = renderableProxyRaw(node.kind === "chain" && target ? target.raw : node.raw);
+      // Hive renames every proxy and does not import the source subscription's
+      // proxy-groups. A dialer-proxy carried by an ordinary imported node can
+      // therefore point at a source-only group or an old proxy name, which
+      // makes Mihomo reject the whole generated config. Hive chains own this
+      // field and set it explicitly below; ordinary nodes must be standalone.
+      delete raw["dialer-proxy"];
       if (node.kind === "chain" && front?.assignedPort) {
         // A target may itself have been imported from a config containing a
         // dialer-proxy field. A Hive chain owns this field and must replace it
         // completely; retaining a stale upstream creates an accidental third
         // hop or a reference to a proxy that is not in the generated config.
-        delete raw["dialer-proxy"];
-        raw["dialer-proxy"] = proxyNameForNode(front);
+        // Keep this reference explicitly quoted in YAML. Mihomo accepts plain
+        // scalars for Hive's generated names, but quoting avoids the exact
+        // parser ambiguity reported in MetaCubeX/mihomo#593 when a proxy name
+        // contains punctuation or a provider-specific label.
+        const dialerProxy = new Scalar(proxyNameForNode(front));
+        dialerProxy.type = Scalar.QUOTE_DOUBLE;
+        raw["dialer-proxy"] = dialerProxy;
       }
       renderedEntries.set(node.hash, { node, raw: { ...raw, name: proxyNameForNode(node) } });
     } catch (error) {
