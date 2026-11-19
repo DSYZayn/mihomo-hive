@@ -134,6 +134,12 @@ SOCKS5 账密提供访问认证，本身不加密传输。公网跨主机连接�
 
 ### 通过代理拉取订阅
 
+在节点池的“导入订阅”中，可通过“拉取代理”选择一个已导入、已分配端口的节点。先让 Mihomo 运行，再拉取目标订阅；无需启用 Sub2API 调度。已保存订阅下也可修改拉取代理，设置会保留，手动重新导入、CLI 拉取和后台自动刷新均使用同一选择。
+
+选择节点后，订阅下载通过该节点的本地 Mihomo 端口并由代理解析域名，自动携带配置的节点入口账密。显式选择优先于容器的代理环境变量和 `NO_PROXY`；节点缺失、退役、未分配端口或连接失败时会报错，不会自动更换节点或改为直连。首次导入还没有可用节点时，可先使用下述环境代理设置，或导入本地订阅文件取得首批节点。
+
+“使用部署代理设置（未配置则直连）”沿用以下环境变量配置：
+
 Docker daemon 的代理用于 Docker 自身访问镜像仓库，不会自动使容器内的订阅下载走代理。使用仓库 Compose 文件时，在同目录 `.env` 显式配置容器的出站代理，例如：
 
 ```dotenv
@@ -207,6 +213,9 @@ CLI 与 Web UI 使用同一套数据库和核心逻辑，适合脚本化任务�
 # 订阅 / 节点
 docker exec mihomo-hive node apps/cli/dist/index.js sub list
 docker exec mihomo-hive node apps/cli/dist/index.js sub add --name demo --url "https://example.com/sub"
+# 创建时指定拉取节点，或修改已保存订阅（省略 --node 恢复部署代理设置）
+docker exec mihomo-hive node apps/cli/dist/index.js sub add --name proxied --url "https://example.com/sub" --fetch-proxy-node <node-hash>
+docker exec mihomo-hive node apps/cli/dist/index.js sub set-fetch-proxy --id <subscription-id> --node <node-hash>
 docker exec mihomo-hive node apps/cli/dist/index.js sub fetch
 docker exec mihomo-hive node apps/cli/dist/index.js nodes import
 docker exec mihomo-hive node apps/cli/dist/index.js nodes list

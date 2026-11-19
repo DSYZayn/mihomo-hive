@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { proxyNodeSchema, runtimeConfigSchema } from "@mihomo-hive/schemas";
 import { renderMihomoConfig } from "./mihomo-render.js";
 import { measureProxyTcpLatency, testProxyTarget } from "./node-test.js";
+import { fetchSubscriptionText, resolveSubscriptionFetchProxyUrl } from "./subscription-fetch.js";
 
 // Opt in with a real Mihomo binary; all requests remain on loopback.
 describe.skipIf(!process.env.HIVE_TEST_MIHOMO_BIN)("Mihomo proxy authentication", () => {
@@ -57,6 +58,10 @@ describe.skipIf(!process.env.HIVE_TEST_MIHOMO_BIN)("Mihomo proxy authentication"
         expect((await testProxyTarget(request)).ok).toBe(false);
         expect((await testProxyTarget({ ...request, auth: { ...auth, password: "wrong" } })).ok).toBe(false);
         expect(await testProxyTarget({ ...request, auth })).toMatchObject({ ok: true, httpStatus: 200 });
+        expect(await fetchSubscriptionText(request.target.url, {
+          proxyUrl: resolveSubscriptionFetchProxyUrl(nodes.find((node) => node.assignedPort === port)!.hash, nodes, config),
+          timeoutMs: 3000
+        })).toBe("ok");
       }
     } finally {
       child.kill();

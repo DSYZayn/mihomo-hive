@@ -11,17 +11,21 @@ export function NodePoolPanel(props: {
   importName: string;
   importUrl: string;
   importKeywords: string;
+  importFetchProxyNodeHash: string | null;
   preview: SubscriptionImportPreview | undefined;
   importError: string | undefined;
   deletePlan: NodeDeletionPlan | undefined;
   previewing: boolean;
   importing: boolean;
   saving: boolean;
+  savingFetchProxy: boolean;
   onImportNameChange: (value: string) => void;
   onImportUrlChange: (value: string) => void;
   onImportKeywordsChange: (value: string) => void;
+  onImportFetchProxyChange: (value: string | null) => void;
+  onUpdateSubscriptionFetchProxy: (id: string, nodeHash: string | null) => void;
   onSaveSubscription: () => void;
-  onPreviewImport: (source?: { id: string; name: string; url: string; excludeKeywords: string[] }) => void;
+  onPreviewImport: (source?: { id: string; name: string; url: string; excludeKeywords: string[] } & Pick<SubscriptionSource, "fetchProxyNodeHash">) => void;
   onRepreviewWithKeywords: (keywords: string[]) => void;
   onApplyImport: (keywords: string[]) => void;
   onClearPreview: () => void;
@@ -38,6 +42,16 @@ export function NodePoolPanel(props: {
   const [frontHash, setFrontHash] = React.useState("");
   const [targetHash, setTargetHash] = React.useState("");
   const [chainName, setChainName] = React.useState("");
+  const fetchProxyNodes = props.nodes.filter((node) => node.assignedPort && !["retired", "deleted"].includes(node.lifecycleStatus));
+  function fetchProxyOptions(selected: string | null | undefined) {
+    return [
+      { label: "使用部署代理设置（未配置则直连）", value: "" },
+      ...fetchProxyNodes.map((node) => ({ label: `${node.name} · ${node.assignedPort}`, value: node.hash })),
+      ...(selected && !fetchProxyNodes.some((node) => node.hash === selected)
+        ? [{ label: `${props.nodes.find((node) => node.hash === selected)?.name ?? "原代理节点"}（不可用，请重新选择）`, value: selected }]
+        : [])
+    ];
+  }
 
   React.useEffect(() => {
     if (!frontCandidates.some((node) => node.hash === frontHash)) setFrontHash(frontCandidates[0]?.hash ?? "");
@@ -71,6 +85,14 @@ export function NodePoolPanel(props: {
         <div className="stack">
           <TextInput label="名称" value={props.importName} onChange={props.onImportNameChange} placeholder="primary" />
           <TextInput label="订阅 URL" value={props.importUrl} onChange={props.onImportUrlChange} placeholder="https://example.com/sub" mono />
+          <SelectInput
+            label="拉取代理"
+            value={props.importFetchProxyNodeHash ?? ""}
+            onChange={(value) => props.onImportFetchProxyChange(value || null)}
+            options={fetchProxyOptions(props.importFetchProxyNodeHash)}
+            disabled={props.busy}
+          />
+          <p className="muted small">可选择已接入 Mihomo 的节点下载订阅，Mihomo 需保持运行。节点先导入并分配端口，即可在此选择。</p>
           <p className="muted small">
             过滤规则在预览弹窗中调整。"保存订阅源" 只保存配置不发起请求；"拉取并预览" 才会下载订阅内容。
           </p>
@@ -103,29 +125,42 @@ export function NodePoolPanel(props: {
             <EmptyState branded title="还没有订阅源" description="输入订阅链接后先预览，再确认导入节点。" />
           ) : (
             props.subscriptions.map((source) => (
-              <div key={source.id} className="subscription-row-card">
-                <div className="subscription-row-main">
-                  <strong>{source.name}</strong>
-                  <span>{source.fetched ? `${source.lastContentBytes ?? 0} bytes` : "已保存"}</span>
+              <div key={source.id} className="subscription-card">
+                <div className="subscription-row-card">
+                  <div className="subscription-row-main">
+                    <strong>{source.name}</strong>
+                    <span>{source.fetched ? `${source.lastContentBytes ?? 0} bytes` : "已保存"}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<RefreshCw size={14} />}
+                    onClick={() =>
+                      props.onPreviewImport({
+                        id: source.id,
+                        name: source.name,
+                        url: source.value,
+                        excludeKeywords: source.excludeKeywords,
+                        fetchProxyNodeHash: source.fetchProxyNodeHash
+                      })
+                    }
+                    disabled={props.busy || props.savingFetchProxy}
+                  >
+                    重新导入
+                  </Button>
+                  <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} onClick={() => props.onDeleteSubscription(source.id)}>
+                    删除
+                  </Button>
                 </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon={<RefreshCw size={14} />}
-                  onClick={() =>
-                    props.onPreviewImport({
-                      id: source.id,
-                      name: source.name,
-                      url: source.value,
-                      excludeKeywords: source.excludeKeywords
-                    })
-                  }
-                >
-                  重新导入
-                </Button>
-                <Button size="sm" variant="ghost" icon={<Trash2 size={14} />} onClick={() => props.onDeleteSubscription(source.id)}>
-                  删除
-                </Button>
+                {source.kind === "url" ? (
+                  <SelectInput
+                    label={`${source.name} · 拉取代理`}
+                    value={source.fetchProxyNodeHash ?? ""}
+                    onChange={(value) => props.onUpdateSubscriptionFetchProxy(source.id, value || null)}
+                    options={fetchProxyOptions(source.fetchProxyNodeHash)}
+                    disabled={props.busy || props.savingFetchProxy}
+                  />
+                ) : null}
               </div>
             ))
           )}

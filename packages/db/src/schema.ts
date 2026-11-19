@@ -7,6 +7,7 @@ export const subscriptions = sqliteTable("subscriptions", {
   value: text("value").notNull(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   lastContent: text("last_content"),
+  fetchProxyNodeHash: text("fetch_proxy_node_hash"),
   excludeKeywords: text("exclude_keywords").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull()

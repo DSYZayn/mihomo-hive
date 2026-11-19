@@ -42,6 +42,8 @@ export interface NodesRouteProps {
   setSubscriptionUrl: (v: string) => void;
   subscriptionKeywords: string;
   setSubscriptionKeywords: (v: string) => void;
+  subscriptionFetchProxyNodeHash: string | null;
+  setSubscriptionFetchProxyNodeHash: (v: string | null) => void;
   parseKeywords: () => string[];
   /** Sub2API 端的代理列表（按 proxy_id 索引），供节点表显示状态 + 承载账号数 */
   sub2apiProxies: Map<number, Sub2ApiProxyRecord>;
@@ -51,12 +53,12 @@ export interface NodesRouteProps {
   previewSelectedDeletePlan: () => Promise<void>;
   requestConfirmation: (action: ConfirmAction) => void;
   mutations: {
-    addSubscription: PendingMutation & { mutate: (input: { name: string; url: string }) => void };
+    addSubscription: PendingMutation & { mutate: (input: { name: string; url: string } & Pick<SubscriptionSource, "fetchProxyNodeHash">) => void };
     previewImport: PendingMutation & {
-      mutate: (input: { id?: string; name?: string; url?: string; excludeKeywords: string[] }) => void;
+      mutate: (input: { id?: string; name?: string; url?: string; excludeKeywords: string[] } & Pick<SubscriptionSource, "fetchProxyNodeHash">) => void;
     };
     applyImport: PendingMutation & {
-      mutate: (input: { id?: string; name: string; url: string; excludeKeywords: string[] }) => void;
+      mutate: (input: { id?: string; name: string; url: string; excludeKeywords: string[] } & Pick<SubscriptionSource, "fetchProxyNodeHash">) => void;
     };
     setLifecycle: PendingMutation & {
       mutate: (input: {
@@ -73,6 +75,7 @@ export interface NodesRouteProps {
     rebuildMihomo: PendingMutation & { mutate: () => void };
     resetIntent: PendingMutation & { mutate: (input: { hashes: string[]; liftFromRetired?: boolean }) => void };
     deleteSubscription: PendingMutation & { mutate: (input: { id: string }) => void };
+    updateSubscriptionFetchProxy: PendingMutation & { mutate: (input: { id: string; fetchProxyNodeHash: string | null }) => void };
     createChain: PendingMutation & {
       mutate: (input: { frontHash: string; targetHash: string; name?: string }) => void;
     };
@@ -98,6 +101,7 @@ export function NodesRoute(props: NodesRouteProps) {
         importName={props.subscriptionName}
         importUrl={props.subscriptionUrl}
         importKeywords={props.subscriptionKeywords}
+        importFetchProxyNodeHash={props.subscriptionFetchProxyNodeHash}
         preview={props.importPreview}
         importError={props.importError}
         deletePlan={props.deletePlan}
@@ -107,18 +111,23 @@ export function NodesRoute(props: NodesRouteProps) {
         onImportNameChange={props.setSubscriptionName}
         onImportUrlChange={props.setSubscriptionUrl}
         onImportKeywordsChange={props.setSubscriptionKeywords}
+        onImportFetchProxyChange={props.setSubscriptionFetchProxyNodeHash}
+        onUpdateSubscriptionFetchProxy={(id, fetchProxyNodeHash) => m.updateSubscriptionFetchProxy.mutate({ id, fetchProxyNodeHash })}
+        savingFetchProxy={m.updateSubscriptionFetchProxy.isPending}
         onSaveSubscription={() =>
-          m.addSubscription.mutate({ name: props.subscriptionName, url: props.subscriptionUrl })
+          m.addSubscription.mutate({ name: props.subscriptionName, url: props.subscriptionUrl, fetchProxyNodeHash: props.subscriptionFetchProxyNodeHash })
         }
         onPreviewImport={(source) => {
           if (source) {
             props.setSubscriptionName(source.name);
             props.setSubscriptionKeywords(source.excludeKeywords.join(","));
+            props.setSubscriptionFetchProxyNodeHash(source.fetchProxyNodeHash ?? null);
             m.previewImport.mutate({ id: source.id, excludeKeywords: source.excludeKeywords });
           } else {
             m.previewImport.mutate({
               name: props.subscriptionName,
               url: props.subscriptionUrl,
+              fetchProxyNodeHash: props.subscriptionFetchProxyNodeHash,
               excludeKeywords: props.parseKeywords()
             });
           }
@@ -134,7 +143,8 @@ export function NodesRoute(props: NodesRouteProps) {
             ...(id ? { id } : {}),
             ...(name ? { name } : {}),
             ...(url ? { url } : {}),
-            excludeKeywords: keywords
+            excludeKeywords: keywords,
+            fetchProxyNodeHash: props.importPreview?.source.fetchProxyNodeHash ?? null
           });
         }}
         onApplyImport={(keywords) => {
@@ -144,7 +154,8 @@ export function NodesRoute(props: NodesRouteProps) {
             ...(previewSourceId ? { id: previewSourceId } : {}),
             name: props.importPreview?.source.name ?? props.subscriptionName,
             url: props.importPreview?.source.value ?? props.subscriptionUrl,
-            excludeKeywords: keywords
+            excludeKeywords: keywords,
+            fetchProxyNodeHash: props.importPreview?.source.fetchProxyNodeHash ?? null
           });
         }}
         onClearPreview={() => props.setImportPreview(undefined)}

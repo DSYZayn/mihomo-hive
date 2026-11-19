@@ -27,7 +27,7 @@ import { appRouter } from "./router.js";
 
 const config = await loadRuntimeConfig();
 const sqlite = openSqlite(config.databasePath);
-const repo = new HiveRepository(sqlite, { subscriptionUserAgent: config.subscriptionUserAgent });
+const repo = new HiveRepository(sqlite, config);
 const startupDeduplicated = repo.deduplicateNodesByIdentity();
 if (startupDeduplicated > 0) {
   console.log(`Merged ${startupDeduplicated} duplicate node(s) on startup.`);

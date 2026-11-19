@@ -1,14 +1,41 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { ProxyNode, RuntimeConfig } from "@mihomo-hive/schemas";
+import { buildProxyUrl } from "./proxy-access.js";
+import { localProbeHost } from "./node-test.js";
 
 const execFileAsync = promisify(execFile);
 const maxSubscriptionBytes = 10 * 1024 * 1024;
 
-/** Fetch only subscriptions through the deployment proxy, without changing other clients. */
+/** Resolve the selected node against live port assignments on every download. */
+export function resolveSubscriptionFetchProxyUrl(
+  nodeHash: string | null | undefined,
+  nodes: ProxyNode[],
+  config: Pick<RuntimeConfig, "listenHost" | "proxyAuth">
+): string | undefined {
+  if (!nodeHash) return undefined;
+  const node = nodes.find((item) => item.hash === nodeHash);
+  if (!node) throw new Error("拉取代理节点已不存在，请重新选择拉取代理。");
+  if (node.lifecycleStatus === "retired" || node.lifecycleStatus === "deleted") {
+    throw new Error("拉取代理节点已退役或删除，请重新选择拉取代理。");
+  }
+  if (!node.assignedPort) throw new Error("拉取代理节点尚未接入 Mihomo，请先为该节点分配端口并启动 Mihomo。");
+  if (node.kind === "chain") {
+    const front = nodes.find((item) => item.hash === node.chain?.frontNodeHash);
+    const target = nodes.find((item) => item.hash === node.chain?.targetNodeHash);
+    if (!front?.assignedPort || !target || [front, target].some((item) => ["retired", "deleted"].includes(item.lifecycleStatus))) {
+      throw new Error("拉取代理的链式节点依赖不可用，请重新选择拉取代理。");
+    }
+  }
+  return buildProxyUrl({ protocol: "socks5h", host: localProbeHost(config.listenHost), port: node.assignedPort, auth: config.proxyAuth });
+}
+
+/** Fetch only subscriptions through the selected node or deployment proxy. */
 export async function fetchSubscriptionText(url: string, options: {
   userAgent?: string | undefined;
   timeoutMs?: number | undefined;
   env?: NodeJS.ProcessEnv;
+  proxyUrl?: string | undefined;
 } = {}): Promise<string> {
   try {
     if (!["http:", "https:"].includes(new URL(url).protocol)) throw new Error();
@@ -25,6 +52,7 @@ export async function fetchSubscriptionText(url: string, options: {
       "--connect-timeout", String(Math.min(10_000, timeoutMs) / 1000),
       "--max-time", String(timeoutMs / 1000), "--max-filesize", String(maxSubscriptionBytes),
       "--user-agent", options.userAgent ?? "Clash.Meta",
+      ...(options.proxyUrl ? ["--proxy", options.proxyUrl, "--noproxy", ""] : []),
       "--header", "Accept: text/yaml, application/yaml, text/plain, */*",
       "--header", "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
       "--write-out", "\n%{http_code} %{http_connect}", "--url", url

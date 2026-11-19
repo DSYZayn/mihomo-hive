@@ -442,6 +442,7 @@ export const subscriptionSourceSchema = z.object({
   kind: z.enum(["url", "file"]),
   value: z.string().min(1),
   enabled: z.boolean().default(true),
+  fetchProxyNodeHash: z.string().min(8).nullable().optional(),
   lastContent: z.string().optional(),
   excludeKeywords: z.array(z.string()).default([]),
   createdAt: z.string(),
@@ -540,6 +541,7 @@ export const subscriptionImportPreviewSchema = z.object({
     name: z.string().min(1),
     kind: z.enum(["url", "file"]),
     value: z.string().min(1),
+    fetchProxyNodeHash: subscriptionSourceSchema.shape.fetchProxyNodeHash,
     fetchedBytes: z.number().int().nonnegative()
   }),
   items: z.array(subscriptionImportPreviewItemSchema),

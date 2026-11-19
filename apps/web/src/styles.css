@@ -968,13 +968,18 @@ input[type="number"] {
   color: var(--info);
 }
 
-.subscription-row-card {
-  display: flex;
-  align-items: center;
+.subscription-card {
+  display: grid;
   gap: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 8px;
+}
+
+.subscription-row-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .subscription-row-card > button:first-child,

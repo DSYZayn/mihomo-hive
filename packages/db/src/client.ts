@@ -33,6 +33,7 @@ function ensureSchema(sqlite: HiveSqlite): void {
       value TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       last_content TEXT,
+      fetch_proxy_node_hash TEXT,
       exclude_keywords TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -211,6 +212,7 @@ function ensureSchema(sqlite: HiveSqlite): void {
     );
   `);
   addColumnIfMissing(sqlite, "subscriptions", "exclude_keywords", "TEXT NOT NULL DEFAULT '[]'");
+  addColumnIfMissing(sqlite, "subscriptions", "fetch_proxy_node_hash", "TEXT");
   addColumnIfMissing(sqlite, "nodes", "lifecycle_status", "TEXT NOT NULL DEFAULT 'candidate'");
   addColumnIfMissing(sqlite, "nodes", "schedulable", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing(sqlite, "nodes", "protected", "INTEGER NOT NULL DEFAULT 0");

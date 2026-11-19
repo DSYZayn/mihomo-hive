@@ -8,7 +8,7 @@ import { parseSubscription, parseSubscriptionOrThrow } from "./subscription.js";
 import { proxyIdentityHash } from "./proxy-identity.js";
 
 export interface BuildSubscriptionPreviewInput {
-  source: Pick<SubscriptionSource, "id" | "name" | "kind" | "value">;
+  source: Pick<SubscriptionSource, "id" | "name" | "kind" | "value" | "fetchProxyNodeHash">;
   content: string;
   existingNodes: ProxyNode[];
   excludeKeywords?: string[];
@@ -51,6 +51,7 @@ export function buildSubscriptionImportPreview(input: BuildSubscriptionPreviewIn
       name: input.source.name,
       kind: input.source.kind,
       value: input.source.value,
+      fetchProxyNodeHash: input.source.fetchProxyNodeHash,
       fetchedBytes: input.content.length
     },
     items,

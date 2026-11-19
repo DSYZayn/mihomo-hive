@@ -44,7 +44,8 @@ import {
   sub2ApiAssignmentOptionsSchema,
   sub2ApiConnectionConfigSchema,
   sub2ApiExportRequestSchema,
-  sub2ApiProtectedProxyRuleSchema
+  sub2ApiProtectedProxyRuleSchema,
+  subscriptionSourceSchema
 } from "@mihomo-hive/schemas";
 import type { HiveRepository } from "@mihomo-hive/db";
 import { buildCodexToolAdapter, safeLoadCrypto } from "./account-fleet-worker.js";
@@ -158,6 +159,7 @@ export const appRouter = t.router({
           id: z.string().optional(),
           name: z.string().min(1).optional(),
           url: z.string().url().optional(),
+          fetchProxyNodeHash: subscriptionSourceSchema.shape.fetchProxyNodeHash,
           excludeKeywords: z.array(z.string()).default([])
         })
       )
@@ -178,6 +180,7 @@ export const appRouter = t.router({
           id: z.string().optional(),
           name: z.string().min(1),
           url: z.string().url(),
+          fetchProxyNodeHash: subscriptionSourceSchema.shape.fetchProxyNodeHash,
           excludeKeywords: z.array(z.string()).default([])
         })
       )
@@ -191,10 +194,15 @@ export const appRouter = t.router({
             id: input.id ?? randomUUID(),
             name: input.name,
             kind: "url",
-            value: input.url
+            value: input.url,
+            fetchProxyNodeHash: input.fetchProxyNodeHash
           });
         const filteredSource = ctx.repo.updateSubscriptionFilters(source.id, input.excludeKeywords);
-        const content = await ctx.repo.fetchSubscriptionContent(filteredSource);
+        const content = await ctx.repo.fetchSubscriptionContent({
+          ...filteredSource,
+          ...(input.fetchProxyNodeHash !== undefined ? { fetchProxyNodeHash: input.fetchProxyNodeHash } : {})
+        });
+        if (input.fetchProxyNodeHash !== undefined) ctx.repo.updateSubscriptionFetchProxy(source.id, input.fetchProxyNodeHash);
         ctx.repo.updateSubscriptionContent(filteredSource.id, content);
         const nodes = filterPreviewImportableNodes({
           source: filteredSource,
@@ -218,9 +226,9 @@ export const appRouter = t.router({
         return { imported: nodes.length, deletedByFilter, deduplicated, sourceId: filteredSource.id };
       }),
     add: protectedProcedure
-      .input(z.object({ name: z.string().min(1), url: z.string().url() }))
+      .input(z.object({ name: z.string().min(1), url: z.string().url(), fetchProxyNodeHash: subscriptionSourceSchema.shape.fetchProxyNodeHash }))
       .mutation(({ ctx, input }) =>
-        summarizeSubscription(ctx.repo.addSubscription({ id: randomUUID(), name: input.name, kind: "url", value: input.url }))
+        summarizeSubscription(ctx.repo.addSubscription({ id: randomUUID(), name: input.name, kind: "url", value: input.url, fetchProxyNodeHash: input.fetchProxyNodeHash }))
       ),
     fetch: protectedProcedure.mutation(async ({ ctx }) => {
       const results = [];
@@ -234,6 +242,9 @@ export const appRouter = t.router({
     updateFilters: protectedProcedure
       .input(z.object({ id: z.string().min(1), excludeKeywords: z.array(z.string()).default([]) }))
       .mutation(({ ctx, input }) => summarizeSubscription(ctx.repo.updateSubscriptionFilters(input.id, input.excludeKeywords))),
+    updateFetchProxy: protectedProcedure
+      .input(z.object({ id: z.string().min(1), fetchProxyNodeHash: subscriptionSourceSchema.shape.fetchProxyNodeHash.unwrap() }))
+      .mutation(({ ctx, input }) => summarizeSubscription(ctx.repo.updateSubscriptionFetchProxy(input.id, input.fetchProxyNodeHash))),
     delete: protectedProcedure.input(z.object({ id: z.string().min(1) })).mutation(({ ctx, input }) => {
       ctx.repo.deleteSubscription(input.id);
       return { ok: true };
@@ -2018,11 +2029,11 @@ function redactUrl(value: string): string {
 
 function resolvePreviewSource(
   repo: HiveRepository,
-  input: { id?: string | undefined; name?: string | undefined; url?: string | undefined }
+  input: { id?: string | undefined; name?: string | undefined; url?: string | undefined } & Pick<SubscriptionSource, "fetchProxyNodeHash">
 ): SubscriptionSource {
   if (input.id) {
     const source = repo.listSubscriptions().find((item) => item.id === input.id);
-    if (source) return source;
+    if (source) return { ...source, ...(input.fetchProxyNodeHash !== undefined ? { fetchProxyNodeHash: input.fetchProxyNodeHash } : {}) };
     // 容错：id 找不到时，若带了 url 就走临时源（预览本就不要求订阅已保存）。
     // 修复"输 URL→预览→加关键词→重新预览"报"订阅源不存在"——首次预览的 source.id
     // 只是个未保存的随机 UUID，重新预览传它回来当然找不到。
@@ -2040,6 +2051,7 @@ function resolvePreviewSource(
     kind: "url",
     value: input.url,
     enabled: true,
+    fetchProxyNodeHash: input.fetchProxyNodeHash,
     excludeKeywords: [],
     createdAt: now,
     updatedAt: now

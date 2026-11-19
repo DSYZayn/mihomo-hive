@@ -81,6 +81,7 @@ sub
   .requiredOption("--name <name>", "Subscription name")
   .option("--url <url>", "Subscription URL")
   .option("--file <file>", "Subscription file")
+  .option("--fetch-proxy-node <hash>", "Use an existing Mihomo node to download this subscription")
   .action(async (options) => {
     if (!options.url && !options.file) {
       throw new Error("Provide --url or --file");
@@ -90,7 +91,8 @@ sub
       id: randomUUID(),
       name: options.name,
       kind: options.url ? "url" : "file",
-      value: options.url ?? options.file
+      value: options.url ?? options.file,
+      fetchProxyNodeHash: options.fetchProxyNode
     });
     console.log(
       JSON.stringify(
@@ -102,6 +104,16 @@ sub
         2
       )
     );
+  });
+
+sub
+  .command("set-fetch-proxy")
+  .description("Set a subscription download proxy; omit --node to use deployment settings")
+  .requiredOption("--id <id>", "Subscription ID")
+  .option("--node <hash>", "Existing node with a Mihomo port")
+  .action(async (options) => {
+    const { repo } = await openRepo();
+    console.log(JSON.stringify(summarizeSubscription(repo.updateSubscriptionFetchProxy(options.id, options.node ?? null)), null, 2));
   });
 
 sub
@@ -594,7 +606,7 @@ async function openRepo() {
   return {
     config,
     sqlite,
-    repo: new HiveRepository(sqlite, { subscriptionUserAgent: config.subscriptionUserAgent })
+    repo: new HiveRepository(sqlite, config)
   };
 }
 

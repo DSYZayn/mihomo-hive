@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import net from "node:net";
 import { once } from "node:events";
-import { fetchSubscriptionText, subscriptionProxyEnvironment } from "./subscription-fetch.js";
+import { proxyNodeSchema, runtimeConfigSchema } from "@mihomo-hive/schemas";
+import { fetchSubscriptionText, resolveSubscriptionFetchProxyUrl, subscriptionProxyEnvironment } from "./subscription-fetch.js";
 
 const servers: Server[] = [];
 const content = "proxies:\n  - name: Test\n    type: socks5\n    server: example.com\n    port: 1080\n";
@@ -106,7 +107,7 @@ describe("subscription downloads through environment proxies", () => {
     await expect(fetchSubscriptionText("file:///private-file")).rejects.toThrow("HTTP 或 HTTPS");
   });
 
-  it("does not fall back to a direct connection when the configured proxy fails", async () => {
+  it.each(["environment", "selected"])("does not fall back to a direct connection when the %s proxy fails", async (mode) => {
     let directHits = 0;
     const origin = await listen(createServer((_req, res) => { directHits++; res.end(content); }));
     const unavailable = createServer();
@@ -115,12 +116,13 @@ describe("subscription downloads through environment proxies", () => {
     const port = (unavailable.address() as net.AddressInfo).port;
     await new Promise<void>((resolve) => unavailable.close(() => resolve()));
     await expect(fetchSubscriptionText(`http://127.0.0.1:${origin}`, {
-      env: environment({ HTTP_PROXY: `http://127.0.0.1:${port}` }), timeoutMs: 1000
+      env: environment({ HTTP_PROXY: `http://127.0.0.1:${port}`, ...(mode === "selected" ? { NO_PROXY: "*" } : {}) }),
+      ...(mode === "selected" ? { proxyUrl: `http://127.0.0.1:${port}` } : {}), timeoutMs: 1000
     })).rejects.toThrow(/无法连接|请求超时/);
     expect(directHits).toBe(0);
   });
 
-  it("supports SOCKS5h with remote DNS through ALL_PROXY", async () => {
+  it.each(["environment", "selected"])("supports SOCKS5h with remote DNS through the %s proxy", async (mode) => {
     let destination = "";
     const sockets = new Set<net.Socket>();
     const proxy = net.createServer((socket) => {
@@ -156,12 +158,56 @@ describe("subscription downloads through environment proxies", () => {
     const port = (proxy.address() as net.AddressInfo).port;
     try {
       expect(await fetchSubscriptionText("http://subscription.invalid/sub", {
-        env: environment({ ALL_PROXY: `socks5h://127.0.0.1:${port}` }), timeoutMs: 2000
+        ...(mode === "selected" ? { proxyUrl: `socks5h://127.0.0.1:${port}` } : {}),
+        env: environment(mode === "selected"
+          ? { HTTP_PROXY: "http://127.0.0.1:1", ALL_PROXY: "http://127.0.0.1:1", NO_PROXY: "*" }
+          : { ALL_PROXY: `socks5h://127.0.0.1:${port}` }), timeoutMs: 2000
       })).toBe(content);
       expect(destination).toBe("subscription.invalid");
     } finally {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => proxy.close(() => resolve()));
     }
+  });
+});
+
+describe("subscription fetch node selection", () => {
+  const node = proxyNodeSchema.parse({
+    hash: "fetch-proxy-node", sourceId: "first", name: "Proxy", originalName: "Proxy", type: "socks5",
+    raw: { type: "socks5", server: "proxy.example", port: 1080 }, assignedPort: 10001,
+    createdAt: "2026-11-19T00:00:00.000Z", updatedAt: "2026-11-19T00:00:00.000Z"
+  });
+  const config = runtimeConfigSchema.parse({ listenHost: "0.0.0.0", proxyAuth: { username: "hive@test", password: "p@ss:word#% /测试" } });
+
+  it("uses candidate node listeners with encoded shared credentials and current port assignments", () => {
+    const url = new URL(resolveSubscriptionFetchProxyUrl(node.hash, [{ ...node, assignedPort: 10002 }], config)!);
+    expect(url.protocol).toBe("socks5h:");
+    expect(url.hostname).toBe("127.0.0.1");
+    expect(url.port).toBe("10002");
+    expect(decodeURIComponent(url.username)).toBe(config.proxyAuth?.username);
+    expect(decodeURIComponent(url.password)).toBe(config.proxyAuth?.password);
+  });
+
+  it("uses IPv6 loopback for wildcard listeners", () => {
+    expect(resolveSubscriptionFetchProxyUrl(node.hash, [node], runtimeConfigSchema.parse({ listenHost: "::" })))
+      .toBe("socks5h://[::1]:10001");
+  });
+
+  it("preserves deployment settings when no node is selected", () => {
+    expect(resolveSubscriptionFetchProxyUrl(null, [], config)).toBeUndefined();
+    expect(resolveSubscriptionFetchProxyUrl(undefined, [], config)).toBeUndefined();
+  });
+
+  it("rejects missing, unassigned and retired nodes instead of choosing another node", () => {
+    expect(() => resolveSubscriptionFetchProxyUrl("missing-node", [node], config)).toThrow("已不存在");
+    const { assignedPort: _port, ...unassigned } = node;
+    expect(() => resolveSubscriptionFetchProxyUrl(node.hash, [unassigned], config)).toThrow("尚未接入 Mihomo");
+    for (const lifecycleStatus of ["retired", "deleted"] as const) {
+      expect(() => resolveSubscriptionFetchProxyUrl(node.hash, [{ ...node, lifecycleStatus }], config)).toThrow("退役或删除");
+    }
+  });
+
+  it("rejects a chain whose upstream nodes have disappeared", () => {
+    expect(() => resolveSubscriptionFetchProxyUrl(node.hash, [{ ...node, kind: "chain" }], config)).toThrow("链式节点依赖不可用");
   });
 });

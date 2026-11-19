@@ -76,6 +76,7 @@ function Dashboard(props: { onLogout: () => void }) {
   const [subscriptionName, setSubscriptionName] = React.useState("");
   const [subscriptionUrl, setSubscriptionUrl] = React.useState("");
   const [subscriptionKeywords, setSubscriptionKeywords] = React.useState("");
+  const [subscriptionFetchProxyNodeHash, setSubscriptionFetchProxyNodeHash] = React.useState<string | null>(null);
   const [exportHost, setExportHost] = React.useState("127.0.0.1");
   const [exportFilename, setExportFilename] = React.useState("sub2api-proxies.json");
   const [failedNodeStatus, setFailedNodeStatus] = React.useState<"active" | "inactive">("inactive");
@@ -232,6 +233,13 @@ function Dashboard(props: { onLogout: () => void }) {
       await refreshOperationalData();
     },
     onError: (error) => failTask(setTask, pushToast, "订阅删除失败", error.message)
+  });
+  const updateSubscriptionFetchProxy = trpc.subscriptions.updateFetchProxy.useMutation({
+    onSuccess: async () => {
+      await finishTask(setTask, pushToast, "拉取代理已保存", "后续手动拉取和自动刷新将使用此设置。");
+      await refreshOperationalData();
+    },
+    onError: (error) => failTask(setTask, pushToast, "拉取代理保存失败", error.message)
   });
   const setNodeLifecycle = trpc.nodes.setLifecycle.useMutation({
     onMutate: () => startTask(setTask, "正在更新节点调度状态", "系统会调整所选节点的生命周期状态。"),
@@ -444,6 +452,7 @@ function Dashboard(props: { onLogout: () => void }) {
     onError: (error) => failTask(setTask, pushToast, "质量检查失败", error.message)
   });
   const busy =
+    updateSubscriptionFetchProxy.isPending ||
     addSubscription.isPending ||
     previewImport.isPending ||
     applyImportPreview.isPending ||
@@ -569,6 +578,8 @@ function Dashboard(props: { onLogout: () => void }) {
           setSubscriptionUrl={setSubscriptionUrl}
           subscriptionKeywords={subscriptionKeywords}
           setSubscriptionKeywords={setSubscriptionKeywords}
+          subscriptionFetchProxyNodeHash={subscriptionFetchProxyNodeHash}
+          setSubscriptionFetchProxyNodeHash={setSubscriptionFetchProxyNodeHash}
           parseKeywords={keywordList}
           sub2apiProxies={sub2apiProxiesById}
           sub2apiConnected={Boolean(sub2apiConfig.data?.configured)}
@@ -588,6 +599,7 @@ function Dashboard(props: { onLogout: () => void }) {
             rebuildMihomo,
             resetIntent,
             deleteSubscription,
+            updateSubscriptionFetchProxy,
             createChain
           }}
         />

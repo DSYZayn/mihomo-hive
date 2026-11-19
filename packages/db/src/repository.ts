@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { fetchSubscriptionText, parseSubscriptionOrThrow } from "@mihomo-hive/core";
+import { fetchSubscriptionText, parseSubscriptionOrThrow, resolveSubscriptionFetchProxyUrl } from "@mihomo-hive/core";
 import {
   accountBudgetRecordSchema,
   accountFleetSpecSchema,
@@ -35,6 +35,7 @@ import type {
   ProxyNode,
   ReconcileTick,
   ReconcileTickSummary,
+  RuntimeConfig,
   SmsRegionHintMemory,
   Sub2ApiConnectionConfig,
   Sub2ApiProtectedProxyRule,
@@ -58,6 +59,7 @@ interface SubscriptionRow {
   value: string;
   enabled: 0 | 1;
   last_content: string | null;
+  fetch_proxy_node_hash: string | null;
   exclude_keywords: string;
   created_at: string;
   updated_at: string;
@@ -229,7 +231,7 @@ export class HiveRepository {
 
   constructor(
     private readonly sqlite: HiveSqlite,
-    private readonly options: { subscriptionUserAgent?: string } = {}
+    private readonly options: Partial<Pick<RuntimeConfig, "subscriptionUserAgent" | "listenHost" | "proxyAuth">> = {}
   ) {
     try {
       this.accountChangeHistoryLimit = this.getAccountFleetSpec().changeHistoryLimit;
@@ -243,32 +245,26 @@ export class HiveRepository {
     name: string;
     kind: "url" | "file";
     value: string;
+    fetchProxyNodeHash?: string | null | undefined;
   }): SubscriptionSource {
+    if (input.fetchProxyNodeHash) this.subscriptionFetchProxyUrl(input.fetchProxyNodeHash);
     const now = new Date().toISOString();
     this.sqlite
       .prepare(
         `
-        INSERT INTO subscriptions (id, name, kind, value, enabled, exclude_keywords, created_at, updated_at)
-        VALUES (@id, @name, @kind, @value, 1, '[]', @now, @now)
+        INSERT INTO subscriptions (id, name, kind, value, enabled, exclude_keywords, fetch_proxy_node_hash, created_at, updated_at)
+        VALUES (@id, @name, @kind, @value, 1, '[]', @fetchProxyNodeHash, @now, @now)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           kind = excluded.kind,
           value = excluded.value,
+          fetch_proxy_node_hash = CASE WHEN @updateFetchProxy THEN excluded.fetch_proxy_node_hash ELSE subscriptions.fetch_proxy_node_hash END,
           enabled = 1,
           updated_at = excluded.updated_at
       `
       )
-      .run({ ...input, now });
-    return {
-      id: input.id,
-      name: input.name,
-      kind: input.kind,
-      value: input.value,
-      enabled: true,
-      excludeKeywords: [],
-      createdAt: now,
-      updatedAt: now
-    };
+      .run({ ...input, fetchProxyNodeHash: input.fetchProxyNodeHash ?? null, updateFetchProxy: input.fetchProxyNodeHash !== undefined ? 1 : 0, now });
+    return subscriptionFromRow(this.sqlite.prepare("SELECT * FROM subscriptions WHERE id = ?").get(input.id) as SubscriptionRow);
   }
 
   listSubscriptions(): SubscriptionSource[] {
@@ -282,7 +278,10 @@ export class HiveRepository {
     try {
       const content = source.kind === "file"
         ? await readFile(source.value, "utf8")
-        : await fetchSubscriptionText(source.value, { userAgent: this.options.subscriptionUserAgent });
+        : await fetchSubscriptionText(source.value, {
+          userAgent: this.options.subscriptionUserAgent,
+          proxyUrl: this.subscriptionFetchProxyUrl(source.fetchProxyNodeHash)
+        });
       parseSubscriptionOrThrow(content, source.id);
       return content;
     } catch (error) {
@@ -294,6 +293,21 @@ export class HiveRepository {
     this.sqlite
       .prepare("UPDATE subscriptions SET last_content = ?, updated_at = ? WHERE id = ?")
       .run(content, new Date().toISOString(), id);
+  }
+
+  private subscriptionFetchProxyUrl(nodeHash: string | null | undefined): string | undefined {
+    return resolveSubscriptionFetchProxyUrl(nodeHash, nodeHash ? this.listNodes() : [], {
+      listenHost: this.options.listenHost ?? "127.0.0.1",
+      ...(this.options.proxyAuth ? { proxyAuth: this.options.proxyAuth } : {})
+    });
+  }
+
+  updateSubscriptionFetchProxy(id: string, nodeHash: string | null): SubscriptionSource {
+    this.subscriptionFetchProxyUrl(nodeHash);
+    const result = this.sqlite.prepare("UPDATE subscriptions SET fetch_proxy_node_hash = ?, updated_at = ? WHERE id = ?")
+      .run(nodeHash, new Date().toISOString(), id);
+    if (!result.changes) throw new Error(`Subscription not found: ${id}`);
+    return subscriptionFromRow(this.sqlite.prepare("SELECT * FROM subscriptions WHERE id = ?").get(id) as SubscriptionRow);
   }
 
   updateSubscriptionFilters(id: string, excludeKeywords: string[]): SubscriptionSource {
@@ -432,6 +446,7 @@ export class HiveRepository {
           // Preserve account attribution and chain dependencies while merging
           // legacy rows into the winner.
           this.sqlite.prepare("UPDATE accounts SET egress_node_hash = ? WHERE egress_node_hash = ?").run(winner.hash, loser.hash);
+          this.sqlite.prepare("UPDATE subscriptions SET fetch_proxy_node_hash = ? WHERE fetch_proxy_node_hash = ?").run(winner.hash, loser.hash);
           this.sqlite.prepare("UPDATE nodes SET chain_json = replace(chain_json, ?, ?), raw_json = replace(raw_json, ?, ?) WHERE kind = 'chain'").run(
             loser.hash,
             winner.hash,
@@ -445,6 +460,7 @@ export class HiveRepository {
           const collision = this.sqlite.prepare("SELECT hash FROM nodes WHERE hash = ?").get(identity) as { hash: string } | undefined;
           if (!collision || collision.hash === winner.hash) {
             this.sqlite.prepare("UPDATE accounts SET egress_node_hash = ? WHERE egress_node_hash = ?").run(identity, winner.hash);
+            this.sqlite.prepare("UPDATE subscriptions SET fetch_proxy_node_hash = ? WHERE fetch_proxy_node_hash = ?").run(identity, winner.hash);
             this.sqlite.prepare("UPDATE nodes SET chain_json = replace(chain_json, ?, ?), raw_json = replace(raw_json, ?, ?) WHERE kind = 'chain'").run(
               winner.hash,
               identity,
@@ -484,6 +500,7 @@ export class HiveRepository {
         if (!winner) continue;
         for (const loser of group.slice(1)) {
           this.sqlite.prepare("UPDATE accounts SET egress_node_hash = ? WHERE egress_node_hash = ?").run(winner.hash, loser.hash);
+          this.sqlite.prepare("UPDATE subscriptions SET fetch_proxy_node_hash = ? WHERE fetch_proxy_node_hash = ?").run(winner.hash, loser.hash);
           this.sqlite.prepare("UPDATE nodes SET chain_json = replace(chain_json, ?, ?), raw_json = replace(raw_json, ?, ?) WHERE kind = 'chain'").run(
             loser.hash,
             winner.hash,
@@ -1696,6 +1713,7 @@ function subscriptionFromRow(row: SubscriptionRow): SubscriptionSource {
     kind: row.kind,
     value: row.value,
     enabled: Boolean(row.enabled),
+    fetchProxyNodeHash: row.fetch_proxy_node_hash ?? null,
     ...(row.last_content ? { lastContent: row.last_content } : {}),
     excludeKeywords: parseKeywords(row.exclude_keywords),
     createdAt: row.created_at,
